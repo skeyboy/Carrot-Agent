@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify generated IPC bindings
+        run: |
+          npm run bindings
+          git diff --exit-code -- src/bindings.ts
+      - name: Run project checks
+        run: npm run check
