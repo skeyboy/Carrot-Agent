@@ -1204,17 +1204,56 @@ button {
   margin-top: 2px;
 }
 .markdown-body {
+  display: grid;
   min-width: 0;
+  gap: 8px;
   color: var(--text-body);
   font-size: 13px;
   line-height: 20px;
   overflow-wrap: anywhere;
 }
-.markdown-body > :first-child {
+.markdown-segment {
+  position: relative;
+  min-width: 0;
+}
+.markdown-segment.has-copy {
+  padding-right: 30px;
+}
+.markdown-segment-content > :first-child {
   margin-top: 0;
 }
-.markdown-body > :last-child {
+.markdown-segment-content > :last-child {
   margin-bottom: 0;
+}
+.markdown-copy-button {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.markdown-copy-button:hover {
+  color: var(--text-primary);
+  background: var(--surface-muted);
+}
+.markdown-copy-button:active {
+  transform: scale(0.97);
+}
+.markdown-copy-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .markdown-body p,
 .markdown-body ul,
@@ -1665,6 +1704,7 @@ body,
   background: #29261d;
 }
 :root[data-theme="dark"] .message-actions button:hover,
+:root[data-theme="dark"] .markdown-copy-button:hover,
 :root[data-theme="dark"] .attachment-strip button:hover,
 :root[data-theme="dark"] .icon-button:hover {
   background: var(--surface-muted);

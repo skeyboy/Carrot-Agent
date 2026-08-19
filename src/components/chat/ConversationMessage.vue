@@ -20,7 +20,7 @@ const emit = defineEmits<{ error: [message: string] }>();
   <article class="message" :class="role">
     <template v-if="role === 'user'">
       <div class="message-content">
-        <MarkdownContent :source="text" />
+        <MarkdownContent :source="text" @error="emit('error', $event)" />
         <MessageActions
           v-if="settled && text"
           :text="text"
@@ -40,7 +40,7 @@ const emit = defineEmits<{ error: [message: string] }>();
           :running="reasoningRunning"
           :duration-ms="reasoningDurationMs"
         />
-        <MarkdownContent v-if="text" :source="text" />
+        <MarkdownContent v-if="text" :source="text" @error="emit('error', $event)" />
         <p v-else-if="!reasoning">…</p>
         <MessageActions
           v-if="role === 'assistant' && settled && text"

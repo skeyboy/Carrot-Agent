@@ -254,7 +254,7 @@ describe("App", () => {
     expect(wrapper.findAll(".message.user")).toHaveLength(1);
     expect(wrapper.get(".message.user").text()).toContain("Final edit");
 
-    expect(wrapper.find('[aria-label="Copy message Markdown source"]').exists()).toBe(false);
+    expect(wrapper.find(".message.user .markdown-copy-button").exists()).toBe(false);
     await wrapper.get('[aria-label="Copy message"]').trigger("click");
     expect(writeText).toHaveBeenCalledWith("Final edit");
     await wrapper.get('[aria-label="Copy response"]').trigger("click");
@@ -332,7 +332,13 @@ describe("App", () => {
     expect(message.find('a[href^="javascript:"]').exists()).toBe(false);
     await wrapper.get('[aria-label="Copy message"]').trigger("click");
     expect(writeText).toHaveBeenCalledWith(source);
-    await wrapper.get('[aria-label="Copy message Markdown source"]').trigger("click");
-    expect(writeText).toHaveBeenLastCalledWith("# Heading\n\n- **Bold item**");
+    const markdownCopies = wrapper.findAll(
+      ".message.user .markdown-segment.has-copy [aria-label='Copy Markdown source']",
+    );
+    expect(markdownCopies).toHaveLength(2);
+    await markdownCopies[0]!.trigger("click");
+    expect(writeText).toHaveBeenLastCalledWith("# Heading");
+    await markdownCopies[1]!.trigger("click");
+    expect(writeText).toHaveBeenLastCalledWith("- **Bold item**");
   });
 });
