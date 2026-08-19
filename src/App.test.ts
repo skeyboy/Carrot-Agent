@@ -248,9 +248,10 @@ describe("App", () => {
     expect(wrapper.findAll(".message.user")).toHaveLength(1);
     expect(wrapper.get(".message.user").text()).toContain("Final edit");
 
-    await wrapper.get('[aria-label="Copy message Markdown source"]').trigger("click");
+    expect(wrapper.find('[aria-label="Copy message Markdown source"]').exists()).toBe(false);
+    await wrapper.get('[aria-label="Copy message"]').trigger("click");
     expect(writeText).toHaveBeenCalledWith("Final edit");
-    await wrapper.get('[aria-label="Copy response Markdown source"]').trigger("click");
+    await wrapper.get('[aria-label="Copy response"]').trigger("click");
     expect(writeText).toHaveBeenCalledWith("Preview response");
   });
 
@@ -312,7 +313,7 @@ describe("App", () => {
     await flushPromises();
 
     const source =
-      "# Heading\n\n- **Bold item**\n\n<script>window.bad = true</script>\n\n[bad](javascript:alert(1))";
+      "Plain intro.\n\n# Heading\n\n- **Bold item**\n\nPlain outro.\n\n<script>window.bad = true</script>\n\n[bad](javascript:alert(1))";
     await wrapper.get('[aria-label="Message"]').setValue(source);
     await wrapper.get(".chat-composer form").trigger("submit");
     await new Promise((resolve) => setTimeout(resolve, 1_450));
@@ -323,7 +324,9 @@ describe("App", () => {
     expect(message.get("li strong").text()).toBe("Bold item");
     expect(message.find("script").exists()).toBe(false);
     expect(message.find('a[href^="javascript:"]').exists()).toBe(false);
-    await wrapper.get('[aria-label="Copy message Markdown source"]').trigger("click");
+    await wrapper.get('[aria-label="Copy message"]').trigger("click");
     expect(writeText).toHaveBeenCalledWith(source);
+    await wrapper.get('[aria-label="Copy message Markdown source"]').trigger("click");
+    expect(writeText).toHaveBeenLastCalledWith("# Heading\n\n- **Bold item**");
   });
 });

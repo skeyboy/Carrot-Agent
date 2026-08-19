@@ -12,8 +12,10 @@
 
 - `ConversationThread.vue`：管理滚动容器、是否跟随最新内容以及 Run 状态；
 - `ThreadScrollIndicator.vue`：只负责状态展示和回到底部命令；
-- `MessageActions.vue`：复制渲染前的消息字符串，并明确标记为 `Copy Markdown`；
+- `MessageActions.vue`：`Copy` 复制完整消息；解析到 Markdown 时额外提供 `Copy Markdown`；
 - `MarkdownContent.vue`：继续只负责安全渲染，不接触剪贴板。
+
+Markdown 源码提取复用 MarkdownIt token 和源码行映射，不用正则重新解释语法。标题、列表、引用、表格、代码块等按完整 block 提取；包含强调、行内代码或链接的段落按完整段落提取。普通段落、禁用后的 HTML、非法链接与转义文本不进入 Markdown 剪贴板内容。
 
 ## 验收场景
 
@@ -21,4 +23,5 @@
 2. 悬浮入口显示 `In progress`，Run 完成后原位置显示 `Complete`；
 3. 点击入口回到底部、隐藏入口，并恢复后续自动跟随；
 4. 用户自行滚到底部也自动隐藏入口和恢复跟随；
-5. `Copy Markdown` 复制原始 Markdown，而不是渲染后的纯文本或 HTML。
+5. 普通内容仅显示 `Copy`，复制完整消息；
+6. 混合内容额外显示 `Copy Markdown`，且只复制其中的 Markdown 源码块，而不是完整消息、渲染后纯文本或 HTML。
