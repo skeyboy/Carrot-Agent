@@ -7,6 +7,7 @@ import type {
   ChatSnapshotDto,
   ChatStartRequest,
   ChatStartResponse,
+  PendingInputIntent,
   RunItemDto,
 } from "../bindings";
 
@@ -38,7 +39,7 @@ const previewHandlers = new Set<(event: ChatEvent) => void>();
 interface PreviewRun {
   id: string;
   conversationId: string;
-  status: "running" | "paused";
+  status: "running" | "paused" | "interrupted" | "recovery_required";
   timers: Array<ReturnType<typeof setTimeout>>;
 }
 const previewRuns = new Map<string, PreviewRun>();
@@ -173,22 +174,48 @@ export async function startChat(request: ChatStartRequest): Promise<ChatStartRes
 
 export async function getChatSnapshot(conversationId: string): Promise<ChatSnapshotDto> {
   if (!isTauri()) {
-    const activeRun = [...previewRuns.values()]
+    let activeRun = [...previewRuns.values()]
       .reverse()
       .find((run) => run.conversationId === conversationId);
+    const recoveryPreview = sessionStorage.getItem("carrot.previewRecovery");
+    if (
+      !activeRun &&
+      (recoveryPreview === "interrupted" || recoveryPreview === "recovery_required")
+    ) {
+      activeRun = {
+        id: `preview-${recoveryPreview}`,
+        conversationId,
+        status: recoveryPreview,
+        timers: [],
+      };
+      previewRuns.set(activeRun.id, activeRun);
+    }
     return {
       conversationId,
       activeRun: activeRun
         ? {
             id: activeRun.id,
             status: activeRun.status,
-            phase: activeRun.status === "paused" ? "none" : "model_stream",
+            phase:
+              activeRun.status === "paused" ||
+              activeRun.status === "interrupted" ||
+              activeRun.status === "recovery_required"
+                ? "none"
+                : "model_stream",
             lastEventSeq: "0",
+            stopReason:
+              activeRun.status === "recovery_required"
+                ? "A tool side effect may have completed before the app stopped."
+                : activeRun.status === "interrupted"
+                  ? "The previous runtime lease expired."
+                  : null,
+            canResume: activeRun.status === "paused" || activeRun.status === "interrupted",
           }
         : null,
       items: [...(previewItems.get(conversationId) ?? [])],
       events: [],
       toolExecutions: [],
+      pendingInputs: [],
     };
   }
   return resultData(await commands.chatSnapshot(conversationId));
@@ -218,6 +245,43 @@ export async function pauseChat(runId: string): Promise<void> {
     return;
   }
   resultData(await commands.chatPause(runId));
+}
+
+export async function resumeChat(
+  runId: string,
+  conversationId: string,
+): Promise<ChatStartResponse> {
+  if (!isTauri()) {
+    const run = previewRuns.get(runId);
+    if (!run || (run.status !== "paused" && run.status !== "interrupted")) {
+      throw new Error("This run cannot be resumed safely");
+    }
+    run.status = "running";
+    sessionStorage.removeItem("carrot.previewRecovery");
+    run.timers.push(
+      setTimeout(() => publishPreview(run, { type: "text_delta", delta: "Resumed response" }), 250),
+      setTimeout(() => {
+        previewRuns.delete(run.id);
+        publishPreview(run, {
+          type: "completed",
+          response_id: `preview-${run.id}`,
+          input_tokens: null,
+          output_tokens: null,
+        });
+      }, 700),
+    );
+    return { runId };
+  }
+  return resultData(await commands.chatResume({ runId, conversationId }));
+}
+
+export async function queueChatInput(
+  runId: string,
+  text: string,
+  intent: PendingInputIntent = "append",
+): Promise<void> {
+  if (!isTauri()) return;
+  resultData(await commands.chatInput({ runId, text, intent }));
 }
 
 export async function subscribeToChatEvents(handler: (event: ChatEvent) => void) {

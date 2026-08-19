@@ -14,6 +14,7 @@ use crate::domain::conversation::{Conversation, ConversationChanges, NewConversa
 use crate::domain::provider::{
     NewProviderProfile, ProviderCatalog, ProviderProfile, ProviderProfileChanges,
 };
+use crate::domain::run::{PendingInput, PendingInputIntent};
 use crate::domain::settings::AppSettings;
 use crate::domain::storage::{ConversationStore, RunStore};
 use crate::error::AppError;
@@ -56,7 +57,13 @@ impl CarrotService {
             .await
             .map_err(AppError::from)?;
         let settings = SettingsStore::load(settings_path).await?;
-        let runs: Arc<dyn RunStore> = Arc::new(SqliteRunStore::new(database.clone()));
+        let runtime_instance_id = uuid::Uuid::now_v7().to_string();
+        let run_store = SqliteRunStore::new(database.clone());
+        run_store
+            .recover_expired_leases(&runtime_instance_id)
+            .await
+            .map_err(AppError::from)?;
+        let runs: Arc<dyn RunStore> = Arc::new(run_store);
 
         Ok(Self {
             conversations: Arc::new(SqliteConversationStore::new(database.clone())),
@@ -69,7 +76,7 @@ impl CarrotService {
             database_path,
             attachment_path,
             cancellation: CancellationTree::default(),
-            runtime_instance_id: uuid::Uuid::now_v7().to_string(),
+            runtime_instance_id,
         })
     }
 
@@ -559,6 +566,11 @@ impl CarrotService {
             }
         };
         let cancellation = self.cancellation.begin_run(run_id.clone()).await;
+        let (lease_stop, lease_task) = start_lease_heartbeat(
+            self.runs.clone(),
+            run_id.clone(),
+            self.runtime_instance_id.clone(),
+        );
         let settings = self.settings().await;
         let runtime = AgentRuntime::new(self.runs.clone(), ToolRegistry::built_in());
         let input = RuntimeInput {
@@ -581,6 +593,8 @@ impl CarrotService {
         let result = runtime
             .run(provider, input, events, cancellation.clone())
             .await;
+        lease_stop.cancel();
+        let _ = lease_task.await;
         self.cancellation.finish_run(&run_id).await;
         match result {
             Ok(()) => Ok(()),
@@ -596,6 +610,9 @@ impl CarrotService {
     ) -> Result<crate::domain::run::ChatSnapshot, AppError> {
         self.get_conversation(conversation_id).await?;
         self.runs
+            .recover_expired_leases(&self.runtime_instance_id)
+            .await?;
+        self.runs
             .snapshot(conversation_id)
             .await
             .map_err(AppError::from)
@@ -603,18 +620,139 @@ impl CarrotService {
 
     pub async fn cancel_chat(&self, run_id: &str) -> Result<(), AppError> {
         if self.cancellation.cancel_run(run_id).await {
+            return Ok(());
+        }
+        let run = self
+            .runs
+            .get_run(run_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("run", run_id))?;
+        if !matches!(
+            run.status,
+            crate::domain::run::RunStatus::Paused
+                | crate::domain::run::RunStatus::Interrupted
+                | crate::domain::run::RunStatus::RecoveryRequired
+        ) {
+            return Err(AppError::not_found("active run", run_id));
+        }
+        self.runs
+            .transition(
+                run_id,
+                crate::domain::run::RunTransition {
+                    status: crate::domain::run::RunStatus::Cancelled,
+                    phase: crate::domain::run::RunPhase::None,
+                    event_kind: "run_recovery_abandoned".to_owned(),
+                    payload: serde_json::json!({"fromStatus": run.status}),
+                    stop_reason: Some("recovery abandoned by user".to_owned()),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn pause_chat(&self, run_id: &str) -> Result<(), AppError> {
+        self.runs.request_pause(run_id).await?;
+        if self.cancellation.pause_run(run_id).await {
             Ok(())
         } else {
             Err(AppError::not_found("active run", run_id))
         }
     }
 
-    pub async fn pause_chat(&self, run_id: &str) -> Result<(), AppError> {
-        if self.cancellation.pause_run(run_id).await {
-            Ok(())
-        } else {
-            Err(AppError::not_found("active run", run_id))
+    pub async fn enqueue_chat_input(
+        &self,
+        run_id: &str,
+        intent: PendingInputIntent,
+        text: String,
+    ) -> Result<PendingInput, AppError> {
+        let text = text.trim().to_owned();
+        if text.is_empty() {
+            return Err(AppError::invalid_input("pending input cannot be empty"));
         }
+        let message = ProviderMessage {
+            role: MessageRole::User,
+            content: vec![MessageContent::Text { text }],
+        };
+        self.runs
+            .enqueue_input(
+                run_id,
+                intent,
+                serde_json::to_value(message)
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+            )
+            .await
+            .map_err(AppError::from)
+    }
+
+    pub async fn resume_chat(
+        &self,
+        run_id: String,
+        conversation_id: &str,
+        events: tokio::sync::mpsc::Sender<ProviderEvent>,
+    ) -> Result<String, AppError> {
+        let existing = self
+            .runs
+            .get_run(&run_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("run", &run_id))?;
+        if existing.conversation_id != conversation_id {
+            return Err(AppError::invalid_input(
+                "run does not belong to the requested conversation",
+            ));
+        }
+        let profile = existing.provider_snapshot.clone();
+        let api_key = match self.credential(&profile.id).await {
+            Ok(secret) => secret,
+            Err(_) if is_loopback_base_url(&profile.base_url) => "local-provider".to_owned(),
+            Err(error) => return Err(error),
+        };
+        let provider: Arc<dyn LlmProvider> = match profile.protocol {
+            crate::domain::provider::ProviderProtocol::Responses => Arc::new(
+                OpenAiResponsesProvider::new(api_key, profile.base_url.clone()),
+            ),
+            crate::domain::provider::ProviderProtocol::ChatCompletions => {
+                Arc::new(OpenAiChatProvider::new(api_key, profile.base_url.clone()))
+            }
+        };
+        let claimed = self
+            .runs
+            .claim_resume(&run_id, &self.runtime_instance_id)
+            .await?;
+        let cancellation = self.cancellation.begin_run(run_id.clone()).await;
+        let (lease_stop, lease_task) = start_lease_heartbeat(
+            self.runs.clone(),
+            run_id.clone(),
+            self.runtime_instance_id.clone(),
+        );
+        let settings = self.settings().await;
+        let runtime = AgentRuntime::new(self.runs.clone(), ToolRegistry::built_in());
+        let input = RuntimeInput {
+            run_id: run_id.clone(),
+            conversation_id: claimed.conversation_id.clone(),
+            strategy: claimed.strategy,
+            provider_profile: profile,
+            model: claimed.model,
+            runtime_instance_id: self.runtime_instance_id.clone(),
+            replaces_run_id: None,
+            user_message: ProviderMessage {
+                role: MessageRole::User,
+                content: Vec::new(),
+            },
+            max_model_steps: settings.max_model_steps,
+            request_timeout: std::time::Duration::from_secs(u64::from(
+                settings.request_timeout_seconds,
+            )),
+        };
+        let result = runtime
+            .resume(provider, input, events, cancellation.clone())
+            .await;
+        lease_stop.cancel();
+        let _ = lease_task.await;
+        self.cancellation.finish_run(&run_id).await;
+        result.map_err(|error| AppError::Internal {
+            message: error.to_string(),
+        })?;
+        Ok(claimed.conversation_id)
     }
 
     pub async fn credential_configured(&self, provider_id: &str) -> Result<bool, AppError> {
@@ -657,6 +795,32 @@ impl CarrotService {
             .map(|profile| profile.credential_ref.clone())
             .ok_or_else(|| AppError::not_found("provider profile", provider_id))
     }
+}
+
+fn start_lease_heartbeat(
+    store: Arc<dyn RunStore>,
+    run_id: String,
+    runtime_instance_id: String,
+) -> (
+    tokio_util::sync::CancellationToken,
+    tokio::task::JoinHandle<()>,
+) {
+    let stop = tokio_util::sync::CancellationToken::new();
+    let task_stop = stop.clone();
+    let task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = task_stop.cancelled() => break,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                    match store.renew_lease(&run_id, &runtime_instance_id).await {
+                        Ok(true) => {}
+                        Ok(false) | Err(_) => break,
+                    }
+                }
+            }
+        }
+    });
+    (stop, task)
 }
 
 fn validate_id(id: &str) -> Result<(), AppError> {

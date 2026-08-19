@@ -42,6 +42,8 @@ fn ipc_builder() -> Builder<tauri::Wry> {
         commands::chat::chat_start,
         commands::chat::chat_cancel,
         commands::chat::chat_pause,
+        commands::chat::chat_resume,
+        commands::chat::chat_input,
         commands::chat::chat_snapshot
     ])
 }

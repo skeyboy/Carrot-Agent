@@ -39,7 +39,7 @@ function submit() {
         </button>
       </span>
     </div>
-    <form :class="{ running }" @submit.prevent="submit">
+    <form :class="{ running, 'has-draft': text.trim() }" @submit.prevent="submit">
       <button
         class="icon-button"
         type="button"
@@ -55,7 +55,6 @@ function submit() {
         rows="1"
         placeholder="Message Carrot"
         aria-label="Message"
-        :disabled="running"
         @keydown.enter.exact.prevent="submit"
       ></textarea>
       <button
@@ -68,6 +67,16 @@ function submit() {
         @click="emit('pause')"
       >
         <Pause :size="15" fill="currentColor" />
+      </button>
+      <button
+        v-if="running && text.trim()"
+        class="icon-button send-button"
+        type="submit"
+        title="Add message to current run"
+        aria-label="Add message to current run"
+        :disabled="busy"
+      >
+        <Send :size="16" />
       </button>
       <button
         v-if="running"

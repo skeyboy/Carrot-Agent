@@ -36,6 +36,8 @@ export const commands = {
 	chatStart: (request: ChatStartRequest) => typedError<ChatStartResponse, AppError>(__TAURI_INVOKE("chat_start", { request })),
 	chatCancel: (runId: string) => typedError<null, AppError>(__TAURI_INVOKE("chat_cancel", { runId })),
 	chatPause: (runId: string) => typedError<null, AppError>(__TAURI_INVOKE("chat_pause", { runId })),
+	chatResume: (request: ChatResumeRequest) => typedError<ChatStartResponse, AppError>(__TAURI_INVOKE("chat_resume", { request })),
+	chatInput: (request: ChatInputRequest) => typedError<null, AppError>(__TAURI_INVOKE("chat_input", { request })),
 	chatSnapshot: (conversationId: string) => typedError<ChatSnapshotDto, AppError>(__TAURI_INVOKE("chat_snapshot", { conversationId })),
 };
 
@@ -45,6 +47,8 @@ export type ActiveRunDto = {
 	status: RunStatus,
 	phase: RunPhase,
 	lastEventSeq: string,
+	stopReason: string | null,
+	canResume: boolean,
 };
 
 export type AppError = { code: "INVALID_INPUT"; message: string } | { code: "NOT_FOUND"; message: string } | { code: "CONFLICT"; message: string } | { code: "STORAGE"; message: string } | { code: "CONFIGURATION"; message: string } | { code: "INTERNAL"; message: string };
@@ -67,12 +71,24 @@ export type AttachmentDto = {
 	createdAtMs: string,
 };
 
+export type ChatInputRequest = {
+	runId: string,
+	intent: PendingInputIntent,
+	text: string,
+};
+
+export type ChatResumeRequest = {
+	runId: string,
+	conversationId: string,
+};
+
 export type ChatSnapshotDto = {
 	conversationId: string,
 	activeRun: ActiveRunDto | null,
 	items: RunItemDto[],
 	events: RunEventDto[],
 	toolExecutions: ToolExecutionDto[],
+	pendingInputs: PendingInputDto[],
 };
 
 export type ChatStartRequest = {
@@ -129,6 +145,16 @@ export type HealthStatus = {
 	platform: string,
 	phase: string,
 };
+
+export type PendingInputDto = {
+	id: string,
+	runId: string,
+	intent: PendingInputIntent,
+	status: string,
+	text: string,
+};
+
+export type PendingInputIntent = "append" | "fork" | "cancel_and_replace";
 
 export type ProviderCapabilitiesDto = {
 	tools: boolean,

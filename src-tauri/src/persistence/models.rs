@@ -3,14 +3,73 @@ use diesel::{AsChangeset, Insertable, Queryable, Selectable};
 use crate::domain::attachment::AttachmentDescriptor;
 use crate::domain::conversation::Conversation;
 use crate::domain::provider::ProviderProfile;
-use crate::domain::run::{AgentRun, RunEvent, RunItem, RunPhase, RunStatus, ToolExecution};
+use crate::domain::run::{
+    AgentRun, PendingInput, PendingInputIntent, RunEvent, RunItem, RunPhase, RunStatus,
+    ToolExecution,
+};
 use crate::domain::settings::RunStrategy;
 use crate::domain::storage::StoreError;
 
 use super::schema::{
-    attachments, conversations, items, plan_steps, plans, run_events, run_snapshots, runs,
-    tool_executions,
+    attachments, conversations, items, pending_inputs, plan_steps, plans, run_events,
+    run_snapshots, runs, tool_executions,
 };
+
+#[derive(Debug, Queryable, Selectable)]
+#[diesel(table_name = pending_inputs)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct PendingInputRow {
+    pub id: String,
+    pub run_id: String,
+    pub intent: String,
+    pub status: String,
+    pub content_json: String,
+    pub created_at_ms: i64,
+    pub consumed_at_ms: Option<i64>,
+}
+
+impl TryFrom<PendingInputRow> for PendingInput {
+    type Error = StoreError;
+
+    fn try_from(row: PendingInputRow) -> Result<Self, Self::Error> {
+        let intent = match row.intent.as_str() {
+            "append" => PendingInputIntent::Append,
+            "fork" => PendingInputIntent::Fork,
+            "cancel_and_replace" => PendingInputIntent::CancelAndReplace,
+            _ => {
+                return Err(StoreError::InvalidData {
+                    message: format!("pending input {} has invalid intent", row.id),
+                });
+            }
+        };
+        Ok(Self {
+            id: row.id,
+            run_id: row.run_id,
+            intent,
+            status: row.status,
+            content: serde_json::from_str(&row.content_json).map_err(|error| {
+                StoreError::InvalidData {
+                    message: format!("pending input content is invalid: {error}"),
+                }
+            })?,
+            created_at_ms: row.created_at_ms,
+            consumed_at_ms: row.consumed_at_ms,
+        })
+    }
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = pending_inputs)]
+pub struct NewPendingInputRow<'a> {
+    pub id: &'a str,
+    pub run_id: &'a str,
+    pub item_id: Option<&'a str>,
+    pub intent: &'a str,
+    pub status: &'a str,
+    pub content_json: &'a str,
+    pub created_at_ms: i64,
+    pub consumed_at_ms: Option<i64>,
+}
 
 #[derive(Debug, Queryable, Selectable)]
 #[diesel(table_name = runs)]

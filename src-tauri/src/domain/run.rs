@@ -219,6 +219,44 @@ pub struct ToolExecutionResult {
     pub cancelled: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingInputIntent {
+    Append,
+    Fork,
+    CancelAndReplace,
+}
+
+impl PendingInputIntent {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Append => "append",
+            Self::Fork => "fork",
+            Self::CancelAndReplace => "cancel_and_replace",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingInput {
+    pub id: String,
+    pub run_id: String,
+    pub intent: PendingInputIntent,
+    pub status: String,
+    pub content: serde_json::Value,
+    pub created_at_ms: i64,
+    pub consumed_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaseRecovery {
+    pub run_id: String,
+    pub status: RunStatus,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct PlanDraft {
     pub goal: String,
@@ -233,6 +271,7 @@ pub struct ChatSnapshot {
     pub items: Vec<RunItem>,
     pub events: Vec<RunEvent>,
     pub tool_executions: Vec<ToolExecution>,
+    pub pending_inputs: Vec<PendingInput>,
 }
 
 #[derive(Debug, Clone)]

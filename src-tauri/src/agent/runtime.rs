@@ -80,7 +80,7 @@ impl AgentRuntime {
             .await?;
 
         let result = self
-            .run_started(provider, &input, events.clone(), cancellation.clone())
+            .run_started(provider, &input, events.clone(), cancellation.clone(), true)
             .await;
         let result = match result {
             Err(RuntimeError::Cancelled) if cancellation.is_pause_requested() => {
@@ -120,14 +120,70 @@ impl AgentRuntime {
         result
     }
 
+    pub async fn resume(
+        &self,
+        provider: Arc<dyn LlmProvider>,
+        input: RuntimeInput,
+        events: mpsc::Sender<ProviderEvent>,
+        cancellation: RunCancellation,
+    ) -> Result<(), RuntimeError> {
+        let result = self
+            .run_started(
+                provider,
+                &input,
+                events.clone(),
+                cancellation.clone(),
+                false,
+            )
+            .await;
+        let result = match result {
+            Err(RuntimeError::Cancelled) if cancellation.is_pause_requested() => {
+                Err(RuntimeError::Paused)
+            }
+            result => result,
+        };
+        if let Err(error) = &result {
+            let (status, event_kind) = match error {
+                RuntimeError::Cancelled => (RunStatus::Cancelled, "run_cancelled"),
+                RuntimeError::Paused => (RunStatus::Paused, "run_paused"),
+                _ => (RunStatus::Failed, "run_failed"),
+            };
+            let _ = self
+                .store
+                .transition(
+                    &input.run_id,
+                    RunTransition {
+                        status,
+                        phase: RunPhase::None,
+                        event_kind: event_kind.to_owned(),
+                        payload: serde_json::json!({"message": error.to_string()}),
+                        stop_reason: Some(error.to_string()),
+                    },
+                )
+                .await;
+            let _ = events
+                .send(match status {
+                    RunStatus::Cancelled => ProviderEvent::Cancelled,
+                    RunStatus::Paused => ProviderEvent::Paused,
+                    _ => ProviderEvent::Failed {
+                        message: error.to_string(),
+                    },
+                })
+                .await;
+            return Ok(());
+        }
+        result
+    }
+
     async fn run_started(
         &self,
         provider: Arc<dyn LlmProvider>,
         input: &RuntimeInput,
         events: mpsc::Sender<ProviderEvent>,
         cancellation: RunCancellation,
+        create_plan: bool,
     ) -> Result<(), RuntimeError> {
-        if input.strategy != RunStrategy::Fast {
+        if create_plan && input.strategy != RunStrategy::Fast {
             self.store
                 .create_plan(
                     &input.run_id,
@@ -152,6 +208,11 @@ impl AgentRuntime {
         for step in 1..=input.max_model_steps {
             if cancellation.is_cancelled() {
                 return Err(RuntimeError::Cancelled);
+            }
+            for item in self.store.consume_append_inputs(&input.run_id).await? {
+                let message = serde_json::from_value(item.content)
+                    .map_err(|error| RuntimeError::Provider(error.to_string()))?;
+                provider_input.push(ProviderInputItem::Message { message });
             }
             self.store
                 .transition(
@@ -182,6 +243,10 @@ impl AgentRuntime {
                 input.request_timeout,
             )
             .await?;
+
+            if cancellation.is_cancelled() {
+                return Err(RuntimeError::Cancelled);
+            }
 
             if !outcome.reasoning.is_empty() {
                 self.store
@@ -238,6 +303,15 @@ impl AgentRuntime {
             }
 
             if outcome.tool_calls.is_empty() {
+                let appended = self.store.consume_append_inputs(&input.run_id).await?;
+                if !appended.is_empty() {
+                    for item in appended {
+                        let message = serde_json::from_value(item.content)
+                            .map_err(|error| RuntimeError::Provider(error.to_string()))?;
+                        provider_input.push(ProviderInputItem::Message { message });
+                    }
+                    continue;
+                }
                 if input.strategy == RunStrategy::Quality && !outcome.text.is_empty() {
                     self.store
                         .transition(
@@ -272,7 +346,8 @@ impl AgentRuntime {
                         )
                         .await?;
                 }
-                self.store
+                let completed = self
+                    .store
                     .transition(
                         &input.run_id,
                         RunTransition {
@@ -283,7 +358,19 @@ impl AgentRuntime {
                             stop_reason: Some("completed".to_owned()),
                         },
                     )
-                    .await?;
+                    .await;
+                if matches!(completed, Err(crate::domain::storage::StoreError::Conflict)) {
+                    let appended = self.store.consume_append_inputs(&input.run_id).await?;
+                    if !appended.is_empty() {
+                        for item in appended {
+                            let message = serde_json::from_value(item.content)
+                                .map_err(|error| RuntimeError::Provider(error.to_string()))?;
+                            provider_input.push(ProviderInputItem::Message { message });
+                        }
+                        continue;
+                    }
+                }
+                completed?;
                 if let Some(completed) = outcome.completed {
                     events
                         .send(completed)

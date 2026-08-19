@@ -192,7 +192,7 @@ SQLite 开启 WAL 仍不等于跨数据库与外部系统的原子事务。系�
 - 每次应用启动生成 `runtime_instance_id`；
 - active Run 记录 owner、lease expiry 和 heartbeat；
 - 同一实例运行时只有 lease 过期才判定 worker 失联；
-- 新实例启动时，所有属于旧实例的非终态 Run 直接进入恢复扫描，无需机械等待 30 秒；
+- 新实例启动时扫描旧实例的非终态 Run；只有 lease 已过期才接管，避免双进程同时执行，未过期记录由恢复 UI 短周期复查；
 - 单实例锁用于避免两个桌面进程同时接管同一 Run。
 
 ### 6.2 启动恢复流程
@@ -369,7 +369,7 @@ run_id, seq, persisted_at_ms, kind, payload
 - 加入 app lifecycle、休眠/唤醒、崩溃和强制终止测试；
 - 完成高风险审批、幂等键和文件原子写协议。
 
-当前已完成首个交互切片：运行中的请求可区分 pause 与 cancel，在安全取消点提交 `paused` 或 `cancelled`；两者都会恢复原始输入和附件，用户编辑后创建新 Run，并在同一事务中 supersede 旧 Run 的消息。该行为满足“暂停后编辑重发”，但不等同于恢复旧 Run 的执行位置；同 Run resume、durable pending input、lease takeover 和副作用 reconcile 仍属于后续 P4。
+当前已完成运行恢复切片：Pause 先事务提交 `pause_requested` 再取消 Future，在安全点提交 `paused`；`paused/interrupted` 通过版本与 lease claim 执行 same-run resume。运行中 `append` 输入先进入 durable inbox，再在模型安全点 exactly-once 转换为用户 Item；`fork/cancel_and_replace` 已有持久化协议，消费策略仍待实现。Runtime 通过心跳续租并扫描过期旧 lease；安全工具中断写入可恢复 Observation，未知外部副作用进入 `recovery_required`，UI 禁止盲目重放。Paused 仍保留显式 Edit 路径，由用户选择后创建替换 Run。
 
 第二个交互切片加入 Provider 明确返回的 reasoning summary。摘要 delta 只作为实时事件，聚合后的摘要与耗时以 `reasoning_summary` Item 等待事务提交，Snapshot 可在重载后恢复；不得把普通文本、工具参数或模型隐藏思维链猜测为推理过程。Responses Profile 仅在原生 OpenAI 类型下请求 `summary: auto`，compatible Provider 未声明结构化支持时不发送该参数。
 

@@ -1,8 +1,8 @@
-# P4 主题与推理摘要切片
+# P4 主题、推理摘要与运行恢复切片
 
 > 完成日期：2026-08-19
 >
-> 范围：自适应主题、消息边界、Provider 推理摘要、折叠交互
+> 范围：自适应主题、消息边界、Provider 推理摘要、暂停/恢复、持久化 inbox、lease takeover 与恢复 UI
 
 ## 1. 执行前基线验证
 
@@ -41,10 +41,40 @@ Chat Completions compatible Adapter 当前 SDK 没有结构化 reasoning delta �
 - 浏览器验证深色 Settings 与会话页无文字重叠，Header、Sidebar、Composer 和消息条目使用一致主题表面。
 - 浏览器验证用户/assistant 条目均为 7px 圆角，用户 SVG 为条目最后一个子元素，消息列表不覆盖 Composer。
 
-## 6. 后续 P4 计划
+## 6. 运行恢复切片结论
 
-1. 将 `pause_requested` 作为独立事务边界，并实现 same-run resume。
-2. 接入 durable pending input inbox 的 append、fork、cancel-and-replace。
-3. 启动时扫描过期 lease，按工具能力执行 takeover 与 reconcile。
-4. 加入高风险审批、未知副作用决策 UI 和幂等键。
-5. 完成休眠/唤醒、强制终止、竞态故障注入和 macOS 打包加固。
+本切片将暂停从内存控制信号提升为持久化协议：`chat_pause` 必须先在单个 SQLite 事务中提交 `run_pause_requested`，把状态改为 `pause_requested`，之后才取消 Provider/Tool Future。工具 Observation 提交会保留 `pause_requested`，Runtime 到达安全点后再提交 `paused`。这样即使进程在点击暂停后崩溃，启动恢复也能完成暂停，而不会把它误判为普通中断。
+
+`chat_resume` 通过版本检查和 lease claim 将 `paused/interrupted` 原子改回 `running`，继续使用原 `run_id`、Provider snapshot、模型和已提交 Items。重复 Resume 会冲突；存在未知外部副作用的 `recovery_required` Run 不允许 Resume。暂停后仍可显式选择 Edit，此时才取消旧 Run、supersede 旧输入并创建替换 Run。
+
+运行中输入通过既有 `pending_inputs` 表落盘。首版 UI 暴露 `append`，后端契约同时保留 `fork`、`cancel_and_replace` intent；后二者只可靠排队，后续编排策略实现前不伪装为已消费。`append` 在模型安全点事务转换为用户 Item，并在 Run 完成事务中再次检查，避免输入与完成事件竞态导致丢失。
+
+每个 active Run 每 10 秒续租，lease 为 30 秒。启动及恢复页加载会扫描属于旧实例且已过期的 lease：无未知副作用时进入 `paused/interrupted`；`executing` 的 `external_side_effect/dangerous` 工具进入 `recovery_required`，禁止自动重放。不会仅凭 owner 不同抢占未过期 lease，否则双进程会产生两个 worker；启动时遗留的 Run 由 UI 每 5 秒复查，收到正常流事件后立即停止复查。
+
+## 7. 恢复 UI
+
+恢复 UI 独立为 `RunRecoveryBanner.vue`：
+
+- `paused/interrupted`：提供 Resume、Stop；Paused 额外提供 Edit；
+- `recovery_required`：展示副作用未知原因，只允许 Abandon，不提供盲重试；
+- 横条占用独立网格行，不覆盖第一条消息；桌面和窄屏下操作区可换行；
+- Composer 在运行中保持可输入，提交成功后才显示追加消息；
+- same-run Resume 保留原用户消息和已提交轨迹，不创建新 Run。
+
+## 8. 版本、测试与验证
+
+本切片复用了 P1 已迁移的 `pending_inputs`、`runs.runtime_instance_id`、`lease_expires_at_ms` 和 P3 的 `tool_executions.risk/retryable`，没有新增表或列，因此不创建空 migration。领域模型、Diesel Row 和 IPC DTO 均从现有版本化 Schema 转换；后续新增 reconcile/approval 字段必须单独 migration。
+
+验证结果：
+
+- Rust 新增 pause/request、same-run claim、重复 Resume 冲突、append exactly-once 消费和未知外部副作用恢复测试；
+- 完整 Rust 测试 28 个通过，1 个默认 ignored；该 ignored 的 OpenAI-compatible 流式测试已使用 `http://127.0.0.1:11434/v1` 的 `phi4-mini:latest` 单独通过；
+- Vue 7 个测试通过，覆盖恢复横条、same-run Resume、显式 Edit 和原有会话控制；
+- 浏览器验证深色桌面下 Pause -> Resume，恢复横条、第一条消息和底部 Composer 不重叠；视觉检查发现并修复了横条绝对定位遮挡首条消息的问题。
+
+## 9. 后续 P4 计划
+
+1. 为 `fork`、`cancel_and_replace` 增加完整消费策略及附件 inbox。
+2. 加入高风险工具审批、人工 reconcile 决策、业务幂等键和可查询副作用 Adapter。
+3. 覆盖休眠/唤醒、强制终止、pause/tool 完成竞态和 Observation commit 前后故障注入。
+4. 完成 macOS 签名、公证、权限说明和打包加固。

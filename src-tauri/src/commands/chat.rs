@@ -3,7 +3,7 @@ use specta::Type;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::application::CarrotService;
-use crate::domain::run::{ChatSnapshot, RunPhase, RunStatus};
+use crate::domain::run::{ChatSnapshot, PendingInputIntent, RunPhase, RunStatus};
 use crate::error::AppError;
 use crate::providers::ProviderEvent;
 
@@ -24,6 +24,21 @@ pub struct ChatStartResponse {
     pub run_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatResumeRequest {
+    pub run_id: String,
+    pub conversation_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatInputRequest {
+    pub run_id: String,
+    pub intent: PendingInputIntent,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatEventDto {
@@ -40,6 +55,7 @@ pub struct ChatSnapshotDto {
     pub items: Vec<RunItemDto>,
     pub events: Vec<RunEventDto>,
     pub tool_executions: Vec<ToolExecutionDto>,
+    pub pending_inputs: Vec<PendingInputDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -49,6 +65,18 @@ pub struct ActiveRunDto {
     pub status: RunStatus,
     pub phase: RunPhase,
     pub last_event_seq: String,
+    pub stop_reason: Option<String>,
+    pub can_resume: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingInputDto {
+    pub id: String,
+    pub run_id: String,
+    pub intent: PendingInputIntent,
+    pub status: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -92,11 +120,16 @@ impl From<ChatSnapshot> for ChatSnapshotDto {
     fn from(snapshot: ChatSnapshot) -> Self {
         Self {
             conversation_id: snapshot.conversation_id,
-            active_run: snapshot.active_run.map(|run| ActiveRunDto {
-                id: run.id,
-                status: run.status,
-                phase: run.phase,
-                last_event_seq: run.last_event_seq.to_string(),
+            active_run: snapshot.active_run.map(|run| {
+                let can_resume = matches!(run.status, RunStatus::Paused | RunStatus::Interrupted);
+                ActiveRunDto {
+                    id: run.id,
+                    status: run.status,
+                    phase: run.phase,
+                    last_event_seq: run.last_event_seq.to_string(),
+                    stop_reason: run.stop_reason,
+                    can_resume,
+                }
             }),
             items: snapshot
                 .items
@@ -136,6 +169,17 @@ impl From<ChatSnapshot> for ChatSnapshotDto {
                     arguments_json: tool.arguments.to_string(),
                     output_json: tool.output.map(|output| output.to_string()),
                     error_message: tool.error_message,
+                })
+                .collect(),
+            pending_inputs: snapshot
+                .pending_inputs
+                .into_iter()
+                .map(|input| PendingInputDto {
+                    id: input.id,
+                    run_id: input.run_id,
+                    intent: input.intent,
+                    status: input.status,
+                    text: message_text(&input.content),
                 })
                 .collect(),
         }
@@ -215,6 +259,67 @@ pub async fn chat_pause(service: State<'_, CarrotService>, run_id: String) -> Re
 
 #[tauri::command]
 #[specta::specta]
+pub async fn chat_input(
+    service: State<'_, CarrotService>,
+    request: ChatInputRequest,
+) -> Result<(), AppError> {
+    service
+        .enqueue_chat_input(&request.run_id, request.intent, request.text)
+        .await
+        .map(|_| ())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn chat_resume(
+    app: AppHandle,
+    _service: State<'_, CarrotService>,
+    request: ChatResumeRequest,
+) -> Result<ChatStartResponse, AppError> {
+    let run_id = request.run_id.clone();
+    let response = ChatStartResponse {
+        run_id: run_id.clone(),
+    };
+    tauri::async_runtime::spawn(async move {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(64);
+        let event_app = app.clone();
+        let event_run_id = run_id.clone();
+        let conversation_id = request.conversation_id.clone();
+        let forwarder = tauri::async_runtime::spawn(async move {
+            while let Some(event) = receiver.recv().await {
+                let _ = event_app.emit(
+                    CHAT_EVENT_NAME,
+                    ChatEventDto {
+                        run_id: event_run_id.clone(),
+                        conversation_id: conversation_id.clone(),
+                        event,
+                    },
+                );
+            }
+        });
+        let service = app.state::<CarrotService>();
+        if let Err(error) = service
+            .resume_chat(run_id.clone(), &request.conversation_id, sender)
+            .await
+        {
+            let _ = app.emit(
+                CHAT_EVENT_NAME,
+                ChatEventDto {
+                    run_id,
+                    conversation_id: request.conversation_id,
+                    event: ProviderEvent::Failed {
+                        message: error.to_string(),
+                    },
+                },
+            );
+        }
+        let _ = forwarder.await;
+    });
+    Ok(response)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn chat_snapshot(
     service: State<'_, CarrotService>,
     conversation_id: String,
@@ -223,4 +328,19 @@ pub async fn chat_snapshot(
         .chat_snapshot(&conversation_id)
         .await
         .map(ChatSnapshotDto::from)
+}
+
+fn message_text(value: &serde_json::Value) -> String {
+    value
+        .get("content")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| {
+            (part.get("type")?.as_str()? == "text")
+                .then(|| part.get("text")?.as_str().map(ToOwned::to_owned))
+                .flatten()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

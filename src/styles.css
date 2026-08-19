@@ -923,6 +923,9 @@ button {
   grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
 }
+.thread-shell.has-recovery {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
 
 .agent-run-status {
   position: absolute;
@@ -945,6 +948,65 @@ button {
 }
 .agent-run-status.paused svg {
   animation: none;
+}
+.run-recovery {
+  position: relative;
+  z-index: 4;
+  display: grid;
+  width: min(680px, calc(100% - 40px));
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid #d7c69b;
+  border-radius: 7px;
+  color: #66501e;
+  background: #fffaf0;
+  box-shadow: 0 4px 14px rgb(40 35 20 / 8%);
+  justify-self: center;
+  margin-top: 14px;
+}
+.run-recovery.critical {
+  border-color: #dfaaa5;
+  color: #812f29;
+  background: #fff5f4;
+}
+.run-recovery-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.run-recovery-copy strong {
+  color: currentColor;
+  font-size: 12px;
+}
+.run-recovery-copy span {
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 15px;
+}
+.run-recovery-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.run-recovery-actions button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid var(--border-control);
+  border-radius: 6px;
+  color: var(--text-primary);
+  background: var(--surface-primary);
+  cursor: pointer;
+  font-size: 10px;
+}
+.run-recovery-actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 @keyframes status-spin {
   to {
@@ -1091,6 +1153,9 @@ button {
 }
 .chat-composer form.running {
   grid-template-columns: 34px minmax(0, 1fr) 34px 34px;
+}
+.chat-composer form.running.has-draft {
+  grid-template-columns: 34px minmax(0, 1fr) 34px 34px 34px;
 }
 .chat-composer textarea {
   width: 100%;
@@ -1308,6 +1373,15 @@ body,
   color: var(--text-secondary);
   background: rgb(32 36 33 / 94%);
 }
+:root[data-theme="dark"] .run-recovery {
+  border-color: #6d5c34;
+  background: #29261d;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 24%);
+}
+:root[data-theme="dark"] .run-recovery.critical {
+  border-color: #75423e;
+  background: #2c211f;
+}
 :root[data-theme="dark"] .assistant-message-actions button:hover,
 :root[data-theme="dark"] .attachment-strip button:hover,
 :root[data-theme="dark"] .icon-button:hover {
@@ -1326,6 +1400,20 @@ body,
     grid-template-columns: 150px minmax(0, 1fr);
     gap: 22px;
     padding: 26px 22px 48px;
+  }
+}
+
+@media (max-width: 720px) {
+  .run-recovery {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+  .run-recovery-actions {
+    grid-column: 2;
+    flex-wrap: wrap;
+  }
+  .chat-composer form.running.has-draft {
+    grid-template-columns: 34px minmax(0, 1fr) repeat(3, 30px);
+    gap: 5px;
   }
 }
 

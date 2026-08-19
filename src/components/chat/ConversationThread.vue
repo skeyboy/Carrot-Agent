@@ -9,6 +9,8 @@ import {
   pickAttachment,
   removeAttachment,
   pauseChat,
+  queueChatInput,
+  resumeChat,
   startChat,
   subscribeToChatEvents,
 } from "../../api/chat";
@@ -17,6 +19,7 @@ import type { ActiveRunDto, AttachmentDto, ChatSnapshotDto, ConversationDto } fr
 import AgentRunStatus from "./AgentRunStatus.vue";
 import ChatComposer from "./ChatComposer.vue";
 import ConversationMessage from "./ConversationMessage.vue";
+import RunRecoveryBanner from "./RunRecoveryBanner.vue";
 
 interface DisplayMessage {
   id: string;
@@ -47,6 +50,7 @@ const attaching = ref(false);
 let unlisten: (() => void) | undefined;
 let bufferedEvents: ChatEvent[] = [];
 let hydrating = true;
+let recoveryPoll: ReturnType<typeof setInterval> | undefined;
 
 onMounted(async () => {
   try {
@@ -57,6 +61,9 @@ onMounted(async () => {
     ]);
     attachments.value = availableAttachments;
     applySnapshot(snapshot);
+    if (snapshot.activeRun && ["running", "pause_requested"].includes(snapshot.activeRun.status)) {
+      recoveryPoll = setInterval(() => void refreshSnapshot(), 5_000);
+    }
     hydrating = false;
     bufferedEvents.forEach((event) => handleEvent(event));
     bufferedEvents = [];
@@ -64,7 +71,10 @@ onMounted(async () => {
     emit("error", errorMessage(cause));
   }
 });
-onBeforeUnmount(() => unlisten?.());
+onBeforeUnmount(() => {
+  unlisten?.();
+  if (recoveryPoll) clearInterval(recoveryPoll);
+});
 
 async function attach() {
   attaching.value = true;
@@ -92,6 +102,29 @@ async function discardAttachment(id: string) {
 }
 
 async function send(text: string) {
+  if (activeRunId.value) {
+    try {
+      controlBusy.value = true;
+      await queueChatInput(activeRunId.value, text);
+      messages.value.push({
+        id: crypto.randomUUID(),
+        runId: activeRunId.value,
+        role: "user",
+        text,
+        settled: true,
+        reasoning: "",
+        reasoningDurationMs: 0,
+        reasoningRunning: false,
+      });
+      scrollToLatest();
+    } catch (cause) {
+      draft.value = text;
+      emit("error", errorMessage(cause));
+    } finally {
+      controlBusy.value = false;
+    }
+    return;
+  }
   controlBusy.value = false;
   const attachmentIds = selectedAttachments.value.map((item) => item.id);
   activeInput.value = { text, attachmentIds };
@@ -135,6 +168,8 @@ async function send(text: string) {
       status: "running",
       phase: "routing",
       lastEventSeq: "0",
+      stopReason: null,
+      canResume: false,
     };
     selectedAttachments.value = [];
     bufferedEvents
@@ -162,6 +197,10 @@ function handleEvent(payload: ChatEvent) {
   if (payload.runId !== activeRunId.value) {
     if (starting.value) bufferedEvents.push(payload);
     return;
+  }
+  if (recoveryPoll) {
+    clearInterval(recoveryPoll);
+    recoveryPoll = undefined;
   }
   applyEvent(payload);
 }
@@ -215,17 +254,24 @@ function applyEvent(payload: ChatEvent) {
     activeInput.value = null;
     controlBusy.value = false;
     void refreshSnapshot();
-  } else if (event.type === "cancelled" || event.type === "paused") {
+  } else if (event.type === "paused") {
+    activeRunId.value = null;
+    const assistant = assistantForRun(payload.runId);
+    if (assistant) assistant.settled = true;
+    if (activeRun.value) {
+      activeRun.value.status = "paused";
+      activeRun.value.phase = "none";
+      activeRun.value.canResume = true;
+      activeRun.value.stopReason = "Paused at a durable checkpoint.";
+    }
+    controlBusy.value = false;
+    void refreshSnapshot();
+  } else if (event.type === "cancelled") {
     restoreActiveInput();
     replacementRunId.value = payload.runId;
     messages.value = messages.value.filter((message) => message.runId !== payload.runId);
     activeRunId.value = null;
-    if (event.type === "paused" && activeRun.value) {
-      activeRun.value.status = "paused";
-      activeRun.value.phase = "none";
-    } else {
-      activeRun.value = null;
-    }
+    activeRun.value = null;
     controlBusy.value = false;
   }
 }
@@ -240,7 +286,6 @@ async function refreshSnapshot() {
 }
 
 function applySnapshot(snapshot: ChatSnapshotDto) {
-  const pausedRunId = snapshot.activeRun?.status === "paused" ? snapshot.activeRun.id : null;
   const reasoningByRun = new Map<string, { text: string; durationMs: number }>();
   const lastAssistantByRun = new Map<string, string>();
   snapshot.items.forEach((item) => {
@@ -260,7 +305,6 @@ function applySnapshot(snapshot: ChatSnapshotDto) {
     }
   });
   messages.value = snapshot.items.flatMap((item): DisplayMessage[] => {
-    if (item.runId === pausedRunId) return [];
     if (item.kind === "message") {
       const content = parseJson(item.contentJson);
       const text = messageText(content);
@@ -302,14 +346,17 @@ function applySnapshot(snapshot: ChatSnapshotDto) {
   });
   scrollToLatest();
   activeRun.value = snapshot.activeRun;
-  activeRunId.value = snapshot.activeRun?.status === "running" ? snapshot.activeRun.id : null;
+  activeRunId.value =
+    snapshot.activeRun?.status === "running" || snapshot.activeRun?.status === "pause_requested"
+      ? snapshot.activeRun.id
+      : null;
   toolCount.value = snapshot.toolExecutions.length;
-  if (snapshot.activeRun?.status === "paused" && !draft.value) {
-    replacementRunId.value = snapshot.activeRun.id;
-    const pausedInput = [...snapshot.items]
-      .reverse()
-      .find((item) => item.runId === snapshot.activeRun?.id && item.role === "user");
-    if (pausedInput) draft.value = messageText(parseJson(pausedInput.contentJson));
+  if (
+    recoveryPoll &&
+    (!snapshot.activeRun || !["running", "pause_requested"].includes(snapshot.activeRun.status))
+  ) {
+    clearInterval(recoveryPoll);
+    recoveryPoll = undefined;
   }
 }
 
@@ -360,6 +407,71 @@ async function pause() {
   }
 }
 
+async function resume() {
+  if (!activeRun.value?.canResume) return;
+  try {
+    controlBusy.value = true;
+    const resumed = await resumeChat(activeRun.value.id, props.conversation.id);
+    activeRunId.value = resumed.runId;
+    activeRun.value.status = "running";
+    activeRun.value.phase = "routing";
+    activeRun.value.canResume = false;
+    activeRun.value.stopReason = null;
+    if (!messages.value.some((message) => message.runId === resumed.runId && !message.settled)) {
+      messages.value.push({
+        id: crypto.randomUUID(),
+        runId: resumed.runId,
+        role: "assistant",
+        text: "",
+        settled: false,
+        reasoning: "",
+        reasoningDurationMs: 0,
+        reasoningRunning: false,
+      });
+    }
+  } catch (cause) {
+    emit("error", errorMessage(cause));
+    await refreshSnapshot();
+  } finally {
+    controlBusy.value = false;
+  }
+}
+
+async function editInterruptedInput() {
+  if (!activeRun.value || activeRun.value.status !== "paused") return;
+  const runId = activeRun.value.id;
+  const input = [...messages.value]
+    .reverse()
+    .find((message) => message.runId === runId && message.role === "user");
+  if (input) draft.value = input.text;
+  try {
+    controlBusy.value = true;
+    await cancelChat(runId);
+    replacementRunId.value = runId;
+    messages.value = messages.value.filter((message) => message.runId !== runId);
+    activeRun.value = null;
+  } catch (cause) {
+    emit("error", errorMessage(cause));
+  } finally {
+    controlBusy.value = false;
+  }
+}
+
+async function abandonRecovery() {
+  if (!activeRun.value) return;
+  try {
+    controlBusy.value = true;
+    await cancelChat(activeRun.value.id);
+    activeRunId.value = null;
+    activeRun.value = null;
+    await refreshSnapshot();
+  } catch (cause) {
+    emit("error", errorMessage(cause));
+  } finally {
+    controlBusy.value = false;
+  }
+}
+
 function restoreActiveInput() {
   if (!activeInput.value) return;
   draft.value = activeInput.value.text;
@@ -387,8 +499,22 @@ function errorMessage(cause: unknown) {
 </script>
 
 <template>
-  <section class="thread-shell">
+  <section
+    class="thread-shell"
+    :class="{
+      'has-recovery':
+        activeRun && ['paused', 'interrupted', 'recovery_required'].includes(activeRun.status),
+    }"
+  >
     <AgentRunStatus :run="activeRun" :tool-count="toolCount" />
+    <RunRecoveryBanner
+      v-if="activeRun && ['paused', 'interrupted', 'recovery_required'].includes(activeRun.status)"
+      :run="activeRun"
+      :busy="controlBusy"
+      @resume="resume"
+      @edit="editInterruptedInput"
+      @abandon="abandonRecovery"
+    />
     <div v-if="messages.length === 0" class="empty-thread">
       <MessageSquare :size="24" />
       <h2>No messages yet</h2>

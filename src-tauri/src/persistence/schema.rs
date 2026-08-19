@@ -12,6 +12,19 @@ diesel::table! {
 }
 
 diesel::table! {
+    pending_inputs (id) {
+        id -> Text,
+        run_id -> Text,
+        item_id -> Nullable<Text>,
+        intent -> Text,
+        status -> Text,
+        content_json -> Text,
+        created_at_ms -> BigInt,
+        consumed_at_ms -> Nullable<BigInt>,
+    }
+}
+
+diesel::table! {
     runs (id) {
         id -> Text,
         conversation_id -> Text,
@@ -115,6 +128,7 @@ diesel::table! {
 diesel::joinable!(runs -> conversations (conversation_id));
 diesel::joinable!(items -> runs (run_id));
 diesel::joinable!(run_events -> runs (run_id));
+diesel::joinable!(pending_inputs -> runs (run_id));
 diesel::joinable!(tool_executions -> runs (run_id));
 diesel::joinable!(plans -> runs (run_id));
 diesel::joinable!(plan_steps -> plans (plan_id));
@@ -127,6 +141,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     runs,
     items,
     run_events,
+    pending_inputs,
     tool_executions,
     plans,
     plan_steps,

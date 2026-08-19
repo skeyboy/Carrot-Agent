@@ -7,8 +7,29 @@ import { resetWorkspacePreview } from "./api/workspace";
 
 describe("App", () => {
   beforeEach(() => {
+    sessionStorage.clear();
     resetWorkspacePreview();
     resetSettingsPreview();
+  });
+
+  it("offers same-run resume for an interrupted lease", async () => {
+    sessionStorage.setItem("carrot.previewRecovery", "interrupted");
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get('[aria-label="New conversation"]').trigger("click");
+    await wrapper.get("#conversation-title").setValue("Recovery test");
+    await wrapper.get(".create-form").trigger("submit");
+    await flushPromises();
+
+    expect(wrapper.get(".run-recovery").text()).toContain("previous runtime lease expired");
+    const resume = wrapper
+      .findAll(".run-recovery-actions button")
+      .find((button) => button.text().includes("Resume"));
+    expect(resume).toBeTruthy();
+    await resume!.trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await flushPromises();
+    expect(wrapper.text()).toContain("Resumed response");
   });
 
   it("creates and renders a local conversation", async () => {
@@ -121,7 +142,7 @@ describe("App", () => {
     expect(user.element.lastElementChild?.tagName.toLowerCase()).toBe("svg");
   });
 
-  it("restores unfinished input after stop and pause, then copies the completed answer", async () => {
+  it("keeps paused content until edit is chosen, then copies the completed answer", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -147,6 +168,14 @@ describe("App", () => {
     await wrapper.get(".chat-composer form").trigger("submit");
     await flushPromises();
     await wrapper.get('[aria-label="Pause response"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.get(".run-recovery").text()).toContain("Run interrupted");
+    expect(wrapper.findAll(".message.user")).toHaveLength(1);
+    const edit = wrapper
+      .findAll(".run-recovery-actions button")
+      .find((button) => button.text().includes("Edit"));
+    expect(edit).toBeTruthy();
+    await edit!.trigger("click");
     await flushPromises();
     expect((composer.element as HTMLTextAreaElement).value).toBe("Paused edit");
     expect(wrapper.findAll(".message.user")).toHaveLength(0);

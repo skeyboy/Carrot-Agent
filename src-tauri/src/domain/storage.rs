@@ -4,8 +4,9 @@ use async_trait::async_trait;
 
 use super::conversation::{Conversation, ConversationChanges, NewConversation};
 use super::run::{
-    AgentRun, ChatSnapshot, CommitResult, NewRun, NewRunItem, NewToolExecution, PlanDraft,
-    RunEvent, RunItem, RunTransition, ToolExecutionResult,
+    AgentRun, ChatSnapshot, CommitResult, LeaseRecovery, NewRun, NewRunItem, NewToolExecution,
+    PendingInput, PendingInputIntent, PlanDraft, RunEvent, RunItem, RunTransition,
+    ToolExecutionResult,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -80,4 +81,32 @@ pub trait RunStore: Send + Sync {
     async fn snapshot(&self, conversation_id: &str) -> Result<ChatSnapshot, StoreError>;
 
     async fn get_run(&self, run_id: &str) -> Result<Option<AgentRun>, StoreError>;
+
+    async fn request_pause(&self, run_id: &str) -> Result<RunEvent, StoreError>;
+
+    async fn claim_resume(
+        &self,
+        run_id: &str,
+        runtime_instance_id: &str,
+    ) -> Result<AgentRun, StoreError>;
+
+    async fn enqueue_input(
+        &self,
+        run_id: &str,
+        intent: PendingInputIntent,
+        content: serde_json::Value,
+    ) -> Result<PendingInput, StoreError>;
+
+    async fn consume_append_inputs(&self, run_id: &str) -> Result<Vec<RunItem>, StoreError>;
+
+    async fn recover_expired_leases(
+        &self,
+        runtime_instance_id: &str,
+    ) -> Result<Vec<LeaseRecovery>, StoreError>;
+
+    async fn renew_lease(
+        &self,
+        run_id: &str,
+        runtime_instance_id: &str,
+    ) -> Result<bool, StoreError>;
 }
