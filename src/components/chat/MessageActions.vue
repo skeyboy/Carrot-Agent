@@ -5,7 +5,7 @@ import { computed, onBeforeUnmount, ref } from "vue";
 const props = defineProps<{ text: string; kind: "message" | "response" }>();
 const emit = defineEmits<{ error: [message: string] }>();
 const copied = ref(false);
-const copyLabel = computed(() => `Copy ${props.kind}`);
+const copyLabel = computed(() => `Copy ${props.kind} Markdown source`);
 let resetTimer: ReturnType<typeof setTimeout> | undefined;
 
 onBeforeUnmount(() => clearTimeout(resetTimer));
@@ -54,12 +54,14 @@ function copyWithSelection(text: string) {
     <button
       type="button"
       :title="copied ? 'Copied' : copyLabel"
-      :aria-label="copied ? `${kind === 'message' ? 'Message' : 'Response'} copied` : copyLabel"
+      :aria-label="
+        copied ? `${kind === 'message' ? 'Message' : 'Response'} Markdown copied` : copyLabel
+      "
       @click="copyText"
     >
       <Check v-if="copied" :size="13" />
       <Copy v-else :size="13" />
-      <span>{{ copied ? "Copied" : "Copy" }}</span>
+      <span>{{ copied ? "Copied" : "Copy Markdown" }}</span>
     </button>
   </div>
 </template>

@@ -248,13 +248,62 @@ describe("App", () => {
     expect(wrapper.findAll(".message.user")).toHaveLength(1);
     expect(wrapper.get(".message.user").text()).toContain("Final edit");
 
-    await wrapper.get('[aria-label="Copy message"]').trigger("click");
+    await wrapper.get('[aria-label="Copy message Markdown source"]').trigger("click");
     expect(writeText).toHaveBeenCalledWith("Final edit");
-    await wrapper.get('[aria-label="Copy response"]').trigger("click");
+    await wrapper.get('[aria-label="Copy response Markdown source"]').trigger("click");
     expect(writeText).toHaveBeenCalledWith("Preview response");
   });
 
+  it("lets user scrolling suspend and restore streaming auto-follow", async () => {
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get('[aria-label="New conversation"]').trigger("click");
+    await wrapper.get("#conversation-title").setValue("Scroll ownership");
+    await wrapper.get(".create-form").trigger("submit");
+    await flushPromises();
+
+    await wrapper.get('[aria-label="Message"]').setValue("Keep my reading position");
+    await wrapper.get(".chat-composer form").trigger("submit");
+    await new Promise((resolve) => setTimeout(resolve, 140));
+    await flushPromises();
+
+    const list = wrapper.get(".message-list").element as HTMLElement;
+    Object.defineProperties(list, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 1_200 },
+    });
+    list.scrollTop = 600;
+    await wrapper.get(".message-list").trigger("scroll");
+
+    expect(wrapper.get(".thread-scroll-indicator").text()).toContain("In progress");
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    await flushPromises();
+    expect(list.scrollTop).toBe(600);
+
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    await flushPromises();
+    expect(wrapper.get(".thread-scroll-indicator").text()).toContain("Complete");
+    expect(list.scrollTop).toBe(600);
+
+    await wrapper.get(".thread-scroll-indicator").trigger("click");
+    await flushPromises();
+    expect(list.scrollTop).toBe(1_200);
+    expect(wrapper.find(".thread-scroll-indicator").exists()).toBe(false);
+
+    list.scrollTop = 500;
+    await wrapper.get(".message-list").trigger("scroll");
+    expect(wrapper.find(".thread-scroll-indicator").exists()).toBe(true);
+    list.scrollTop = 900;
+    await wrapper.get(".message-list").trigger("scroll");
+    expect(wrapper.find(".thread-scroll-indicator").exists()).toBe(false);
+  });
+
   it("renders message Markdown while keeping unsafe HTML and links inert", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
     const wrapper = mount(App);
     await flushPromises();
     await wrapper.get('[aria-label="New conversation"]').trigger("click");
@@ -274,5 +323,7 @@ describe("App", () => {
     expect(message.get("li strong").text()).toBe("Bold item");
     expect(message.find("script").exists()).toBe(false);
     expect(message.find('a[href^="javascript:"]').exists()).toBe(false);
+    await wrapper.get('[aria-label="Copy message Markdown source"]').trigger("click");
+    expect(writeText).toHaveBeenCalledWith(source);
   });
 });

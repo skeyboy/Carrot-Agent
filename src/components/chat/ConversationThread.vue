@@ -32,6 +32,7 @@ import AgentRunStatus from "./AgentRunStatus.vue";
 import ChatComposer from "./ChatComposer.vue";
 import ConversationMessage from "./ConversationMessage.vue";
 import RunRecoveryBanner from "./RunRecoveryBanner.vue";
+import ThreadScrollIndicator from "./ThreadScrollIndicator.vue";
 import ToolApprovalBanner from "./ToolApprovalBanner.vue";
 
 interface DisplayMessage {
@@ -49,6 +50,8 @@ const props = defineProps<{ conversation: ConversationDto; supportsImages: boole
 const emit = defineEmits<{ error: [message: string] }>();
 const messages = ref<DisplayMessage[]>([]);
 const messageList = ref<HTMLElement | null>(null);
+const autoFollowLatest = ref(true);
+const showScrollIndicator = ref(false);
 const attachments = ref<AttachmentDto[]>([]);
 const selectedAttachments = ref<AttachmentDto[]>([]);
 const activeRunId = ref<string | null>(null);
@@ -77,6 +80,7 @@ const uncertainTool = computed(() =>
 const queuedBranch = computed(() =>
   pendingInputs.value.find((input) => input.status === "pending" && input.intent !== "append"),
 );
+const responseInProgress = computed(() => starting.value || activeRun.value !== null);
 let unlisten: (() => void) | undefined;
 let bufferedEvents: ChatEvent[] = [];
 let hydrating = true;
@@ -636,9 +640,31 @@ function assistantForRun(runId: string) {
     .find((message) => message.runId === runId && message.role === "assistant");
 }
 
-function scrollToLatest() {
+function handleMessageScroll() {
+  const list = messageList.value;
+  if (!list) return;
+  const atLatest = list.scrollHeight - list.scrollTop - list.clientHeight <= 24;
+  autoFollowLatest.value = atLatest;
+  showScrollIndicator.value = !atLatest;
+}
+
+function jumpToLatest() {
+  autoFollowLatest.value = true;
+  showScrollIndicator.value = false;
+  scrollToLatest(true);
+}
+
+function scrollToLatest(force = false) {
   void nextTick(() => {
-    if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight;
+    const list = messageList.value;
+    if (!list) return;
+    if (!force && !autoFollowLatest.value) {
+      handleMessageScroll();
+      return;
+    }
+    list.scrollTop = list.scrollHeight;
+    autoFollowLatest.value = true;
+    showScrollIndicator.value = false;
   });
 }
 
@@ -700,7 +726,7 @@ function errorMessage(cause: unknown) {
       <MessageSquare :size="24" />
       <h2>No messages yet</h2>
     </div>
-    <div v-else ref="messageList" class="message-list">
+    <div v-else ref="messageList" class="message-list" @scroll.passive="handleMessageScroll">
       <ConversationMessage
         v-for="message in messages"
         :key="message.id"
@@ -713,19 +739,28 @@ function errorMessage(cause: unknown) {
         @error="emit('error', $event)"
       />
     </div>
-    <ChatComposer
-      v-model="draft"
-      v-model:intent="inputIntent"
-      :attachments="selectedAttachments"
-      :running="activeRunId !== null"
-      :attaching="attaching"
-      :busy="controlBusy"
-      :supports-images="supportsImages"
-      @send="send"
-      @attach="attach"
-      @remove-attachment="discardAttachment"
-      @cancel="cancel"
-      @pause="pause"
-    />
+    <div class="composer-dock">
+      <div class="thread-scroll-indicator-layer">
+        <ThreadScrollIndicator
+          :visible="showScrollIndicator"
+          :in-progress="responseInProgress"
+          @jump="jumpToLatest"
+        />
+      </div>
+      <ChatComposer
+        v-model="draft"
+        v-model:intent="inputIntent"
+        :attachments="selectedAttachments"
+        :running="activeRunId !== null"
+        :attaching="attaching"
+        :busy="controlBusy"
+        :supports-images="supportsImages"
+        @send="send"
+        @attach="attach"
+        @remove-attachment="discardAttachment"
+        @cancel="cancel"
+        @pause="pause"
+      />
+    </div>
   </section>
 </template>

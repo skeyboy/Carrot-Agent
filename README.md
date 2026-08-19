@@ -30,6 +30,7 @@ For native macOS debugging, open `platforms/macos/Carrot.xcodeproj` and use the 
 
 - [System design and implementation plan](docs/llm-client-design-plan.md)
 - [Tauri multi-platform shell layout](docs/platform-shell-layout.md)
+- [Conversation scroll ownership and Markdown copy](docs/conversation-scroll-and-markdown-copy.md)
 - [Agent modes and resilient session runtime](docs/agent-runtime-modes-and-resilience.md)
 - [Phase 0 baseline report](docs/phase-0-baseline.md)
 - [Phase 1 local persistence report](docs/phase-1-local-persistence.md)
