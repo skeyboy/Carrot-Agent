@@ -12,6 +12,21 @@ diesel::table! {
 }
 
 diesel::table! {
+    attachments (id) {
+        id -> Text,
+        conversation_id -> Text,
+        item_id -> Nullable<Text>,
+        file_name -> Text,
+        media_type -> Text,
+        byte_length -> BigInt,
+        content_hash -> Text,
+        relative_path -> Text,
+        status -> Text,
+        created_at_ms -> BigInt,
+    }
+}
+
+diesel::table! {
     provider_profiles (id) {
         id -> Text,
         label -> Text,

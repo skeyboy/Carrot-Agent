@@ -12,10 +12,55 @@ export const commands = {
 	conversationDelete: (request: DeleteConversationRequest) => typedError<null, AppError>(__TAURI_INVOKE("conversation_delete", { request })),
 	providerProfileList: () => typedError<ProviderProfilesDto, AppError>(__TAURI_INVOKE("provider_profile_list")),
 	providerProfileReload: () => typedError<ProviderProfilesDto, AppError>(__TAURI_INVOKE("provider_profile_reload")),
+	settingsGet: () => typedError<SettingsSnapshotDto, AppError>(__TAURI_INVOKE("settings_get")),
+	settingsUpdate: (request: UpdateSettingsRequest) => typedError<SettingsSnapshotDto, AppError>(__TAURI_INVOKE("settings_update", { request })),
+	credentialStatusList: () => typedError<CredentialStatusDto[], AppError>(__TAURI_INVOKE("credential_status_list")),
+	credentialSet: (request: SetCredentialRequest) => typedError<CredentialStatusDto, AppError>(__TAURI_INVOKE("credential_set", { request })),
+	credentialDelete: (providerId: string) => typedError<CredentialStatusDto, AppError>(__TAURI_INVOKE("credential_delete", { providerId })),
+	attachmentList: (conversationId: string) => typedError<AttachmentDto[], AppError>(__TAURI_INVOKE("attachment_list", { conversationId })),
+	attachmentPickAndImport: (conversationId: string) => typedError<{
+	id: string,
+	conversationId: string,
+	mediaType: string,
+	fileName: string,
+	byteLength: string,
+	contentHash: string,
+	createdAtMs: string,
+} | null, AppError>(__TAURI_INVOKE("attachment_pick_and_import", { conversationId })),
+	attachmentDelete: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("attachment_delete", { id })),
+	chatStart: (request: ChatStartRequest) => typedError<ChatStartResponse, AppError>(__TAURI_INVOKE("chat_start", { request })),
+	chatCancel: (runId: string) => typedError<null, AppError>(__TAURI_INVOKE("chat_cancel", { runId })),
 };
 
 /* Types */
 export type AppError = { code: "INVALID_INPUT"; message: string } | { code: "NOT_FOUND"; message: string } | { code: "CONFLICT"; message: string } | { code: "STORAGE"; message: string } | { code: "CONFIGURATION"; message: string } | { code: "INTERNAL"; message: string };
+
+export type AppSettings = {
+	requestTimeoutSeconds: number,
+	maxModelSteps: number,
+	attachmentMaxMegabytes: number,
+	defaultStrategy: RunStrategy,
+};
+
+export type AttachmentDto = {
+	id: string,
+	conversationId: string,
+	mediaType: string,
+	fileName: string,
+	byteLength: string,
+	contentHash: string,
+	createdAtMs: string,
+};
+
+export type ChatStartRequest = {
+	conversationId: string,
+	text: string,
+	attachmentIds: string[],
+};
+
+export type ChatStartResponse = {
+	runId: string,
+};
 
 export type ConversationDto = {
 	id: string,
@@ -31,6 +76,11 @@ export type CreateConversationRequest = {
 	title: string,
 	providerProfileId: string | null,
 	model: string | null,
+};
+
+export type CredentialStatusDto = {
+	providerId: string,
+	configured: boolean,
 };
 
 export type DeleteConversationRequest = {
@@ -67,12 +117,30 @@ export type ProviderProfilesDto = {
 	profiles: ProviderProfileDto[],
 };
 
+export type RunStrategy = "fast" | "auto" | "quality";
+
+export type SetCredentialRequest = {
+	providerId: string,
+	secret: string,
+};
+
+export type SettingsSnapshotDto = {
+	settings: AppSettings,
+	settingsPath: string,
+	databasePath: string,
+	attachmentPath: string,
+};
+
 export type UpdateConversationRequest = {
 	id: string,
 	expectedVersion: number,
 	title: string | null,
 	defaultProviderProfileId: string | null,
 	defaultModel: string | null,
+};
+
+export type UpdateSettingsRequest = {
+	settings: AppSettings,
 };
 
 /* Tauri Specta runtime */

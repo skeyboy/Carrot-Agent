@@ -1,9 +1,75 @@
 use diesel::{AsChangeset, Insertable, Queryable, Selectable};
 
+use crate::domain::attachment::AttachmentDescriptor;
 use crate::domain::conversation::Conversation;
 use crate::domain::storage::StoreError;
 
-use super::schema::conversations;
+use super::schema::{attachments, conversations};
+
+#[derive(Debug, Queryable, Selectable)]
+#[diesel(table_name = attachments)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct AttachmentRow {
+    pub id: String,
+    pub conversation_id: String,
+    #[allow(dead_code)]
+    pub item_id: Option<String>,
+    pub file_name: String,
+    pub media_type: String,
+    pub byte_length: i64,
+    pub content_hash: String,
+    pub relative_path: String,
+    pub status: String,
+    pub created_at_ms: i64,
+}
+
+impl TryFrom<AttachmentRow> for AttachmentDescriptor {
+    type Error = StoreError;
+
+    fn try_from(row: AttachmentRow) -> Result<Self, Self::Error> {
+        let byte_length = u64::try_from(row.byte_length).map_err(|_| StoreError::InvalidData {
+            message: format!("attachment {} has an invalid byte length", row.id),
+        })?;
+        if row.id.trim().is_empty()
+            || row.conversation_id.trim().is_empty()
+            || row.file_name.trim().is_empty()
+            || row.media_type != "image/png"
+            || row.content_hash.trim().is_empty()
+            || row.relative_path.trim().is_empty()
+            || row.status != "ready"
+            || row.created_at_ms < 0
+        {
+            return Err(StoreError::InvalidData {
+                message: format!("attachment {} failed domain validation", row.id),
+            });
+        }
+        Ok(Self {
+            id: row.id,
+            conversation_id: row.conversation_id,
+            media_type: row.media_type,
+            file_name: row.file_name,
+            byte_length,
+            content_hash: row.content_hash,
+            relative_path: row.relative_path,
+            created_at_ms: row.created_at_ms,
+        })
+    }
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = attachments)]
+pub struct NewAttachmentRow<'a> {
+    pub id: &'a str,
+    pub conversation_id: &'a str,
+    pub item_id: Option<&'a str>,
+    pub file_name: &'a str,
+    pub media_type: &'a str,
+    pub byte_length: i64,
+    pub content_hash: &'a str,
+    pub relative_path: &'a str,
+    pub status: &'a str,
+    pub created_at_ms: i64,
+}
 
 #[derive(Debug, Queryable, Selectable)]
 #[diesel(table_name = conversations)]

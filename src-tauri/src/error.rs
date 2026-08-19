@@ -68,3 +68,19 @@ impl From<crate::providers::ProviderConfigError> for AppError {
         }
     }
 }
+
+impl From<crate::settings::SettingsError> for AppError {
+    fn from(error: crate::settings::SettingsError) -> Self {
+        Self::Configuration {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<crate::credentials::CredentialError> for AppError {
+    fn from(error: crate::credentials::CredentialError) -> Self {
+        Self::Configuration {
+            message: error.to_string(),
+        }
+    }
+}

@@ -1,15 +1,5 @@
 <script setup lang="ts">
-import {
-  Check,
-  Database,
-  MessageSquare,
-  Pencil,
-  Plus,
-  RefreshCw,
-  Server,
-  Trash2,
-  X,
-} from "lucide-vue-next";
+import { Check, MessageSquare, Pencil, Plus, Server, Trash2, X } from "lucide-vue-next";
 import { computed, onMounted, ref } from "vue";
 
 import {
@@ -20,10 +10,34 @@ import {
   reloadProviderProfiles,
   updateConversation,
 } from "./api/workspace";
-import type { ConversationDto, ProviderProfilesDto } from "./bindings";
+import {
+  deleteCredential,
+  getSettings,
+  listCredentialStatuses,
+  setCredential,
+  updateSettings,
+} from "./api/settings";
+import { loadHealthStatus } from "./api/system";
+import SidebarSettingsNav from "./components/SidebarSettingsNav.vue";
+import SettingsPage from "./components/settings/SettingsPage.vue";
+import type { SettingsSection } from "./components/settings/SettingsPage.vue";
+import ConversationThread from "./components/chat/ConversationThread.vue";
+import type {
+  ConversationDto,
+  CredentialStatusDto,
+  HealthStatus,
+  ProviderProfilesDto,
+  SettingsSnapshotDto,
+} from "./bindings";
 
+type AppView = "workspace" | "settings";
 const conversations = ref<ConversationDto[]>([]);
 const providers = ref<ProviderProfilesDto>({ configPath: "", profiles: [] });
+const settingsSnapshot = ref<SettingsSnapshotDto | null>(null);
+const credentialStatuses = ref<CredentialStatusDto[]>([]);
+const health = ref<HealthStatus | null>(null);
+const appView = ref<AppView>("workspace");
+const settingsSection = ref<SettingsSection>("providers");
 const selectedId = ref<string | null>(null);
 const error = ref<string | null>(null);
 const isLoading = ref(true);
@@ -33,6 +47,8 @@ const newTitle = ref("");
 const newProviderId = ref("");
 const editingId = ref<string | null>(null);
 const editingTitle = ref("");
+const isSavingSettings = ref(false);
+const savingCredentialId = ref<string | null>(null);
 
 const selectedConversation = computed(
   () => conversations.value.find((conversation) => conversation.id === selectedId.value) ?? null,
@@ -47,18 +63,77 @@ async function loadWorkspace() {
   isLoading.value = true;
   error.value = null;
   try {
-    const [conversationItems, providerItems] = await Promise.all([
-      listConversations(),
-      listProviderProfiles(),
-    ]);
+    const [conversationItems, providerItems, settingsValue, statuses, healthValue] =
+      await Promise.all([
+        listConversations(),
+        listProviderProfiles(),
+        getSettings(),
+        listCredentialStatuses(),
+        loadHealthStatus(),
+      ]);
     conversations.value = conversationItems;
     providers.value = providerItems;
+    settingsSnapshot.value = settingsValue;
+    credentialStatuses.value = statuses;
+    health.value = healthValue;
     newProviderId.value = providerItems.profiles[0]?.id ?? "";
     selectedId.value = conversationItems[0]?.id ?? null;
   } catch (cause) {
     error.value = errorMessage(cause);
   } finally {
     isLoading.value = false;
+  }
+}
+
+function openWorkspace() {
+  appView.value = "workspace";
+}
+
+function openSettings(section: SettingsSection = "providers") {
+  settingsSection.value = section;
+  appView.value = "settings";
+}
+
+async function saveSettings(settings: import("./bindings").AppSettings) {
+  isSavingSettings.value = true;
+  error.value = null;
+  try {
+    settingsSnapshot.value = await updateSettings(settings);
+  } catch (cause) {
+    error.value = errorMessage(cause);
+  } finally {
+    isSavingSettings.value = false;
+  }
+}
+
+async function saveCredential(providerId: string, secret: string) {
+  if (!secret) return;
+  savingCredentialId.value = providerId;
+  error.value = null;
+  try {
+    const status = await setCredential(providerId, secret);
+    credentialStatuses.value = credentialStatuses.value.map((item) =>
+      item.providerId === providerId ? status : item,
+    );
+  } catch (cause) {
+    error.value = errorMessage(cause);
+  } finally {
+    savingCredentialId.value = null;
+  }
+}
+
+async function removeCredential(providerId: string) {
+  savingCredentialId.value = providerId;
+  error.value = null;
+  try {
+    const status = await deleteCredential(providerId);
+    credentialStatuses.value = credentialStatuses.value.map((item) =>
+      item.providerId === providerId ? status : item,
+    );
+  } catch (cause) {
+    error.value = errorMessage(cause);
+  } finally {
+    savingCredentialId.value = null;
   }
 }
 
@@ -73,6 +148,7 @@ async function submitConversation() {
     });
     conversations.value = [created, ...conversations.value];
     selectedId.value = created.id;
+    appView.value = "workspace";
     newTitle.value = "";
     isCreating.value = false;
   } catch (cause) {
@@ -144,7 +220,9 @@ onMounted(loadWorkspace);
   <div class="app-shell">
     <aside class="sidebar">
       <header class="brand-row">
-        <div class="brand-mark" aria-hidden="true">C</div>
+        <button class="brand-mark" type="button" aria-label="Open workspace" @click="openWorkspace">
+          C
+        </button>
         <div>
           <strong>Carrot</strong>
           <span>Local workspace</span>
@@ -194,7 +272,10 @@ onMounted(loadWorkspace);
             v-if="editingId !== conversation.id"
             class="conversation-select"
             type="button"
-            @click="selectedId = conversation.id"
+            @click="
+              selectedId = conversation.id;
+              openWorkspace();
+            "
           >
             <MessageSquare :size="16" aria-hidden="true" />
             <span>
@@ -249,25 +330,11 @@ onMounted(loadWorkspace);
         </article>
       </nav>
 
-      <footer class="provider-footer">
-        <div class="provider-heading">
-          <Server :size="16" aria-hidden="true" />
-          <span>{{ providers.profiles.length }} providers</span>
-          <button
-            class="icon-button subtle"
-            type="button"
-            title="Reload provider configuration"
-            aria-label="Reload provider configuration"
-            :disabled="isReloadingProviders"
-            @click="reloadProviders"
-          >
-            <RefreshCw :size="14" aria-hidden="true" />
-          </button>
-        </div>
-        <p :title="providers.configPath">
-          {{ providers.configPath || "Provider config unavailable" }}
-        </p>
-      </footer>
+      <SidebarSettingsNav
+        :provider-count="providers.profiles.length"
+        :active="appView === 'settings'"
+        @open="openSettings"
+      />
     </aside>
 
     <main class="conversation-pane">
@@ -283,7 +350,23 @@ onMounted(loadWorkspace);
         </button>
       </div>
 
-      <template v-if="selectedConversation">
+      <SettingsPage
+        v-if="appView === 'settings'"
+        :initial-section="settingsSection"
+        :providers="providers"
+        :snapshot="settingsSnapshot"
+        :credential-statuses="credentialStatuses"
+        :health="health"
+        :reloading-providers="isReloadingProviders"
+        :saving-settings="isSavingSettings"
+        :saving-credential-id="savingCredentialId"
+        @reload-providers="reloadProviders"
+        @save-settings="saveSettings"
+        @save-credential="saveCredential"
+        @delete-credential="removeCredential"
+      />
+
+      <template v-else-if="selectedConversation">
         <header class="conversation-header">
           <div>
             <p>Conversation</p>
@@ -299,14 +382,11 @@ onMounted(loadWorkspace);
             </span>
           </div>
         </header>
-        <section class="empty-thread" aria-label="Conversation content">
-          <MessageSquare :size="24" aria-hidden="true" />
-          <h2>No messages yet</h2>
-        </section>
-        <footer class="storage-status">
-          <Database :size="15" aria-hidden="true" />
-          <span>SQLite · version {{ selectedConversation.version }}</span>
-        </footer>
+        <ConversationThread
+          :key="selectedConversation.id"
+          :conversation="selectedConversation"
+          @error="error = $event"
+        />
       </template>
 
       <section v-else class="empty-workspace">

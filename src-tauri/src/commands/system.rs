@@ -19,7 +19,7 @@ pub fn health_check() -> Result<HealthStatus, AppError> {
         app_name: "Carrot".to_owned(),
         app_version: env!("CARGO_PKG_VERSION").to_owned(),
         platform: std::env::consts::OS.to_owned(),
-        phase: "P1 local persistence".to_owned(),
+        phase: "P2 provider runtime".to_owned(),
     })
 }
 
@@ -30,7 +30,7 @@ mod tests {
         let status = super::health_check().expect("health check should succeed");
 
         assert_eq!(status.app_name, "Carrot");
-        assert_eq!(status.phase, "P1 local persistence");
+        assert_eq!(status.phase, "P2 provider runtime");
         assert!(!status.app_version.is_empty());
         assert!(!status.platform.is_empty());
     }

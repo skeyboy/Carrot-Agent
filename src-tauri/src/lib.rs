@@ -6,6 +6,7 @@ mod domain;
 mod error;
 mod persistence;
 mod providers;
+mod settings;
 mod sync;
 mod tools;
 
@@ -24,7 +25,17 @@ fn ipc_builder() -> Builder<tauri::Wry> {
         commands::conversation::conversation_update,
         commands::conversation::conversation_delete,
         commands::provider::provider_profile_list,
-        commands::provider::provider_profile_reload
+        commands::provider::provider_profile_reload,
+        commands::settings::settings_get,
+        commands::settings::settings_update,
+        commands::settings::credential_status_list,
+        commands::settings::credential_set,
+        commands::settings::credential_delete,
+        commands::attachment::attachment_list,
+        commands::attachment::attachment_pick_and_import,
+        commands::attachment::attachment_delete,
+        commands::chat::chat_start,
+        commands::chat::chat_cancel
     ])
 }
 
@@ -46,12 +57,15 @@ pub fn run() {
     export_typescript_bindings(&builder);
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let app_config_dir = app.path().app_config_dir()?;
             let service = tauri::async_runtime::block_on(application::CarrotService::initialize(
                 app_data_dir.join("carrot.sqlite3"),
                 app_config_dir.join("providers.toml"),
+                app_config_dir.join("settings.toml"),
+                app_data_dir.join("attachments"),
             ))?;
             app.manage(service);
             Ok(())

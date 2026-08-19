@@ -19,21 +19,31 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 async-trait = "0.1"
+base64 = "0.22"
+futures-util = "0.3"
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 diesel = { version = "2.3", features = ["sqlite"] }
 diesel-async = { version = "0.9", features = ["deadpool", "migrations", "sqlite"] }
 diesel_migrations = "2.3"
 libsqlite3-sys = { version = "0.38", features = ["bundled"] }
+openai-oxide = { version = "0.16", default-features = false, features = ["responses"] }
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json"] }
 specta-typescript = "=0.0.12"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 thiserror = "2"
-tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "sync"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
+tokio-util = "0.7"
 toml = "1"
 url = "2"
 uuid = { version = "1", features = ["serde", "v7"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+keyring = "4.1"
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,10 +1,10 @@
 # Carrot LLM 客户端设计与实施规划
 
-> 版本：v5
+> 版本：v6
 >
 > 更新日期：2026-08-19
 >
-> 当前阶段：P1 已完成，下一阶段 P2
+> 当前阶段：P2 核心已完成，下一阶段 P3
 
 ## 1. 产品目标与确认边界
 
@@ -183,13 +183,13 @@ P1 创建 `runs`、`items`、`run_events` 与 `pending_inputs` 的稳定数据�
 
 ### Provider SDK 选型
 
-P2 计划采用第三方 Rust SDK `openai-oxide` 作为 OpenAI Responses 与已验证 OpenAI-compatible 端点的 Adapter 实现。它支持自定义 Base URL、Responses、流式事件和 function calling，适合放在基础设施层；使用时关闭 default features，按需启用 `responses` 等最小 feature 集。
+P2 已采用第三方 Rust SDK `openai-oxide` 0.16 作为 OpenAI Responses Adapter。依赖关闭 default features，仅启用 `responses`；自定义 Base URL、`store`、图片 data URL、严格 Function Schema、文本增量和 function-call 完成事件均转换为 Carrot 自有模型。Chat Completions compatible Adapter 仍待后续实现，不能因为 Profile 可配置就宣称该协议已可执行。
 
 `openai-oxide` 不作为原生 Gemini SDK。Gemini 的 OpenAI-compatible 网关只有在协议契约测试通过时才复用 compatible Adapter；未来直连 Gemini 原生 API 时实现独立 `GeminiProvider`，并在该阶段评估原生 SDK 或多 Provider SDK。无论采用何种 SDK，Agent Runtime 只看到 Carrot 自有的 Provider domain model。
 
 ## 10. Tauri IPC
 
-Command 负责请求/响应，Channel 负责流式有序事件。前端不得获得通用 SQL、任意 HTTP 代理、任意工具执行、密钥读取或任意路径访问接口。
+Command 负责请求/响应，P2 通过带 `run_id` 的 Tauri Event 转发 Provider 流；P3 durable Runtime 引入单调 sequence、缺口检测与快照恢复。前端不得获得通用 SQL、任意 HTTP 代理、任意工具执行、密钥读取或任意路径访问接口。
 
 P1-P3 逐步加入：
 
@@ -264,7 +264,7 @@ Rust 单元测试覆盖 SSE 分片、Schema、call/output 关联、状态机、�
 | ---- | ------------------------------------------------------------------------- | ------ |
 | P0   | 工程、分层、类型安全 IPC、质量门禁、ADR                                   | 已完成 |
 | P1   | 异步 Diesel/SQLite、可恢复 Schema、模型转换、会话 CRUD、Provider 配置加载 | 已完成 |
-| P2   | 凭证、`openai-oxide` Adapter、Responses/compatible、SSE、附件/图片        | 待开始 |
+| P2   | 设置中心、Keychain、`openai-oxide` Responses、SSE、取消树、附件/图片      | 已完成 |
 | P3   | 工具 Registry/Executor、统一 Run 引擎、混合模式、事件与审计 UI            | 待开始 |
 | P4   | 审批、安全、持久化输入队列、暂停/恢复、崩溃恢复、macOS 打包加固           | 待开始 |
 | P5   | 局域网发现、配对、加密同步与冲突处理                                      | 待开始 |
@@ -272,7 +272,7 @@ Rust 单元测试覆盖 SSE 分片、Schema、call/output 关联、状态机、�
 
 每个阶段完成后更新独立阶段报告，记录交付物、验证命令、遗留风险和下一阶段计划。
 
-P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。
+P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。P2 阶段结论、验证边界与 P3 计划见 [Phase 2 Provider Runtime 报告](phase-2-provider-runtime.md)。
 
 ## 16. P0 验收
 

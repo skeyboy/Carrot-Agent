@@ -5,7 +5,7 @@ const browserPreviewStatus: HealthStatus = {
   appName: "Carrot",
   appVersion: "0.1.0",
   platform: "browser preview",
-  phase: "P1 local persistence",
+  phase: "P2 provider runtime",
 };
 
 export async function loadHealthStatus(): Promise<HealthStatus> {
