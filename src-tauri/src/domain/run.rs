@@ -135,6 +135,8 @@ pub struct NewRun {
     pub model: String,
     pub runtime_instance_id: String,
     pub replaces_run_id: Option<String>,
+    pub parent_run_id: Option<String>,
+    pub source_pending_input_id: Option<String>,
     pub user_content: serde_json::Value,
 }
 
@@ -199,6 +201,9 @@ pub struct ToolExecution {
     pub prepared_at_ms: i64,
     pub started_at_ms: Option<i64>,
     pub completed_at_ms: Option<i64>,
+    pub idempotency_key: Option<String>,
+    pub reconciliation_status: String,
+    pub reconciliation_note: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -210,6 +215,7 @@ pub struct NewToolExecution {
     pub arguments: serde_json::Value,
     pub arguments_hash: String,
     pub retryable: bool,
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -242,11 +248,44 @@ impl PendingInputIntent {
 pub struct PendingInput {
     pub id: String,
     pub run_id: String,
+    pub item_id: Option<String>,
     pub intent: PendingInputIntent,
     pub status: String,
     pub content: serde_json::Value,
     pub created_at_ms: i64,
     pub consumed_at_ms: Option<i64>,
+    pub child_run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolApproval {
+    pub id: String,
+    pub run_id: String,
+    pub tool_execution_id: String,
+    pub call_id: String,
+    pub arguments_hash: String,
+    pub status: String,
+    pub requested_at_ms: i64,
+    pub resolved_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryResolution {
+    MarkSucceeded,
+    MarkFailed,
+    Abandon,
+}
+
+impl RecoveryResolution {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MarkSucceeded => "resolved_succeeded",
+            Self::MarkFailed => "resolved_failed",
+            Self::Abandon => "abandoned",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
@@ -272,6 +311,7 @@ pub struct ChatSnapshot {
     pub events: Vec<RunEvent>,
     pub tool_executions: Vec<ToolExecution>,
     pub pending_inputs: Vec<PendingInput>,
+    pub approvals: Vec<ToolApproval>,
 }
 
 #[derive(Debug, Clone)]

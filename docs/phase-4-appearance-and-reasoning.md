@@ -72,9 +72,6 @@ Chat Completions compatible Adapter 当前 SDK 没有结构化 reasoning delta �
 - Vue 7 个测试通过，覆盖恢复横条、same-run Resume、显式 Edit 和原有会话控制；
 - 浏览器验证深色桌面下 Pause -> Resume，恢复横条、第一条消息和底部 Composer 不重叠；视觉检查发现并修复了横条绝对定位遮挡首条消息的问题。
 
-## 9. 后续 P4 计划
+## 9. 后续进展
 
-1. 为 `fork`、`cancel_and_replace` 增加完整消费策略及附件 inbox。
-2. 加入高风险工具审批、人工 reconcile 决策、业务幂等键和可查询副作用 Adapter。
-3. 覆盖休眠/唤醒、强制终止、pause/tool 完成竞态和 Observation commit 前后故障注入。
-4. 完成 macOS 签名、公证、权限说明和打包加固。
+上述 fork/cancel-and-replace、附件 inbox、高风险审批、人工 reconcile、业务幂等键、生命周期故障注入和 macOS bundle 加固已经在 [P4 韧性、审批与 macOS 加固收口报告](phase-4-resilience-and-macos.md) 完成。Developer ID 签名与 Apple 公证保留为持有发布证书的 CI 门禁。

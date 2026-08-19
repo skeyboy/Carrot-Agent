@@ -97,6 +97,13 @@ pub enum ProviderEvent {
         name: String,
         arguments: serde_json::Value,
     },
+    ApprovalRequired {
+        tool_execution_id: String,
+        call_id: String,
+        name: String,
+        risk: String,
+        arguments: serde_json::Value,
+    },
     Completed {
         response_id: String,
         input_tokens: Option<i64>,

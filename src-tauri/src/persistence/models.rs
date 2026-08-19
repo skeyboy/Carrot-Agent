@@ -5,14 +5,14 @@ use crate::domain::conversation::Conversation;
 use crate::domain::provider::ProviderProfile;
 use crate::domain::run::{
     AgentRun, PendingInput, PendingInputIntent, RunEvent, RunItem, RunPhase, RunStatus,
-    ToolExecution,
+    ToolApproval, ToolExecution,
 };
 use crate::domain::settings::RunStrategy;
 use crate::domain::storage::StoreError;
 
 use super::schema::{
     attachments, conversations, items, pending_inputs, plan_steps, plans, run_events,
-    run_snapshots, runs, tool_executions,
+    run_snapshots, runs, tool_approvals, tool_executions,
 };
 
 #[derive(Debug, Queryable, Selectable)]
@@ -21,11 +21,13 @@ use super::schema::{
 pub struct PendingInputRow {
     pub id: String,
     pub run_id: String,
+    pub item_id: Option<String>,
     pub intent: String,
     pub status: String,
     pub content_json: String,
     pub created_at_ms: i64,
     pub consumed_at_ms: Option<i64>,
+    pub child_run_id: Option<String>,
 }
 
 impl TryFrom<PendingInputRow> for PendingInput {
@@ -45,6 +47,7 @@ impl TryFrom<PendingInputRow> for PendingInput {
         Ok(Self {
             id: row.id,
             run_id: row.run_id,
+            item_id: row.item_id,
             intent,
             status: row.status,
             content: serde_json::from_str(&row.content_json).map_err(|error| {
@@ -54,6 +57,7 @@ impl TryFrom<PendingInputRow> for PendingInput {
             })?,
             created_at_ms: row.created_at_ms,
             consumed_at_ms: row.consumed_at_ms,
+            child_run_id: row.child_run_id,
         })
     }
 }
@@ -69,6 +73,7 @@ pub struct NewPendingInputRow<'a> {
     pub content_json: &'a str,
     pub created_at_ms: i64,
     pub consumed_at_ms: Option<i64>,
+    pub child_run_id: Option<&'a str>,
 }
 
 #[derive(Debug, Queryable, Selectable)]
@@ -156,6 +161,48 @@ pub struct NewRunRow<'a> {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub completed_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Queryable, Selectable)]
+#[diesel(table_name = tool_approvals)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct ToolApprovalRow {
+    pub id: String,
+    pub run_id: String,
+    pub tool_execution_id: String,
+    pub call_id: String,
+    pub arguments_hash: String,
+    pub status: String,
+    pub requested_at_ms: i64,
+    pub resolved_at_ms: Option<i64>,
+}
+
+impl From<ToolApprovalRow> for ToolApproval {
+    fn from(row: ToolApprovalRow) -> Self {
+        Self {
+            id: row.id,
+            run_id: row.run_id,
+            tool_execution_id: row.tool_execution_id,
+            call_id: row.call_id,
+            arguments_hash: row.arguments_hash,
+            status: row.status,
+            requested_at_ms: row.requested_at_ms,
+            resolved_at_ms: row.resolved_at_ms,
+        }
+    }
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = tool_approvals)]
+pub struct NewToolApprovalRow<'a> {
+    pub id: &'a str,
+    pub run_id: &'a str,
+    pub tool_execution_id: &'a str,
+    pub call_id: &'a str,
+    pub arguments_hash: &'a str,
+    pub status: &'a str,
+    pub requested_at_ms: i64,
+    pub resolved_at_ms: Option<i64>,
 }
 
 #[derive(AsChangeset)]
@@ -285,6 +332,9 @@ pub struct ToolExecutionRow {
     pub prepared_at_ms: i64,
     pub started_at_ms: Option<i64>,
     pub completed_at_ms: Option<i64>,
+    pub idempotency_key: Option<String>,
+    pub reconciliation_status: String,
+    pub reconciliation_note: Option<String>,
 }
 
 impl TryFrom<ToolExecutionRow> for ToolExecution {
@@ -317,6 +367,9 @@ impl TryFrom<ToolExecutionRow> for ToolExecution {
             prepared_at_ms: row.prepared_at_ms,
             started_at_ms: row.started_at_ms,
             completed_at_ms: row.completed_at_ms,
+            idempotency_key: row.idempotency_key,
+            reconciliation_status: row.reconciliation_status,
+            reconciliation_note: row.reconciliation_note,
         })
     }
 }
@@ -338,6 +391,9 @@ pub struct NewToolExecutionRow<'a> {
     pub prepared_at_ms: i64,
     pub started_at_ms: Option<i64>,
     pub completed_at_ms: Option<i64>,
+    pub idempotency_key: Option<&'a str>,
+    pub reconciliation_status: &'a str,
+    pub reconciliation_note: Option<&'a str>,
 }
 
 #[derive(Insertable)]

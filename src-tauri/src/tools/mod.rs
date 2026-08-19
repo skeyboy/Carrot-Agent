@@ -14,6 +14,7 @@ pub enum ToolRisk {
     ReadOnly,
     LocalWrite,
     ExternalSideEffect,
+    Dangerous,
 }
 
 impl ToolRisk {
@@ -22,6 +23,7 @@ impl ToolRisk {
             Self::ReadOnly => "read_only",
             Self::LocalWrite => "local_write",
             Self::ExternalSideEffect => "external_side_effect",
+            Self::Dangerous => "dangerous",
         }
     }
 }
@@ -32,6 +34,11 @@ pub struct ToolCapabilities {
     pub idempotent: bool,
     pub cancellable: bool,
     pub reconcile: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolExecutionContext {
+    pub idempotency_key: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -50,9 +57,13 @@ pub enum ToolError {
 pub trait AgentTool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
     fn capabilities(&self) -> ToolCapabilities;
+    fn business_idempotency_key(&self, _arguments: &Value) -> Option<String> {
+        None
+    }
     async fn execute(
         &self,
         arguments: Value,
+        context: ToolExecutionContext,
         cancellation: CancellationToken,
     ) -> Result<Value, ToolError>;
 }
@@ -94,17 +105,30 @@ impl ToolRegistry {
             .ok_or_else(|| ToolError::Unknown(name.to_owned()))
     }
 
+    pub fn idempotency_key(
+        &self,
+        name: &str,
+        arguments: &Value,
+        fallback: String,
+    ) -> Result<String, ToolError> {
+        self.tools
+            .get(name)
+            .map(|tool| tool.business_idempotency_key(arguments).unwrap_or(fallback))
+            .ok_or_else(|| ToolError::Unknown(name.to_owned()))
+    }
+
     pub async fn execute(
         &self,
         name: &str,
         arguments: Value,
+        context: ToolExecutionContext,
         cancellation: CancellationToken,
     ) -> Result<Value, ToolError> {
         let tool = self
             .tools
             .get(name)
             .ok_or_else(|| ToolError::Unknown(name.to_owned()))?;
-        tool.execute(arguments, cancellation).await
+        tool.execute(arguments, context, cancellation).await
     }
 }
 
@@ -137,8 +161,10 @@ impl AgentTool for CurrentTimeTool {
     async fn execute(
         &self,
         arguments: Value,
+        context: ToolExecutionContext,
         cancellation: CancellationToken,
     ) -> Result<Value, ToolError> {
+        debug_assert!(!context.idempotency_key.is_empty());
         if cancellation.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
@@ -189,8 +215,10 @@ impl AgentTool for CalculatorTool {
     async fn execute(
         &self,
         arguments: Value,
+        context: ToolExecutionContext,
         cancellation: CancellationToken,
     ) -> Result<Value, ToolError> {
+        debug_assert!(!context.idempotency_key.is_empty());
         if cancellation.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
@@ -237,7 +265,7 @@ fn finite_number(value: Option<&Value>, name: &str) -> Result<f64, ToolError> {
 
 #[cfg(test)]
 mod tests {
-    use super::ToolRegistry;
+    use super::{ToolExecutionContext, ToolRegistry};
     use tokio_util::sync::CancellationToken;
 
     #[tokio::test]
@@ -247,11 +275,24 @@ mod tests {
             .execute(
                 "calculator",
                 serde_json::json!({"operation": "multiply", "left": 6, "right": 7}),
+                ToolExecutionContext {
+                    idempotency_key: "test-calculation".to_owned(),
+                },
                 CancellationToken::new(),
             )
             .await
             .unwrap();
         assert_eq!(result["result"], 42.0);
         assert!(registry.definitions().iter().all(|tool| tool.strict));
+        assert_eq!(
+            registry
+                .idempotency_key(
+                    "calculator",
+                    &serde_json::json!({}),
+                    "execution-1".to_owned()
+                )
+                .unwrap(),
+            "execution-1"
+        );
     }
 }

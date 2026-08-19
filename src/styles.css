@@ -926,6 +926,11 @@ button {
 .thread-shell.has-recovery {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
+.run-notices {
+  display: grid;
+  gap: 8px;
+  padding: 14px 20px 0;
+}
 
 .agent-run-status {
   position: absolute;
@@ -964,7 +969,6 @@ button {
   background: #fffaf0;
   box-shadow: 0 4px 14px rgb(40 35 20 / 8%);
   justify-self: center;
-  margin-top: 14px;
 }
 .run-recovery.critical {
   border-color: #dfaaa5;
@@ -985,6 +989,68 @@ button {
   color: var(--text-secondary);
   font-size: 10px;
   line-height: 15px;
+}
+.run-recovery-copy code,
+.tool-decision-copy code {
+  overflow: hidden;
+  padding-top: 3px;
+  color: var(--text-secondary);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-decision,
+.queued-branch {
+  display: grid;
+  width: min(680px, 100%);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  justify-self: center;
+  padding: 10px 11px;
+  border: 1px solid #d7c69b;
+  border-radius: 7px;
+  color: #66501e;
+  background: #fffaf0;
+}
+.queued-branch {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.tool-decision-copy,
+.queued-branch > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.tool-decision-copy strong,
+.queued-branch strong {
+  font-size: 12px;
+}
+.tool-decision-copy span,
+.queued-branch span {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-decision-actions {
+  display: flex;
+  gap: 5px;
+}
+.tool-decision-actions button,
+.queued-branch button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid var(--border-control);
+  border-radius: 6px;
+  color: var(--text-primary);
+  background: var(--surface-primary);
+  cursor: pointer;
+  font-size: 10px;
 }
 .run-recovery-actions {
   display: flex;
@@ -1150,6 +1216,23 @@ button {
   border: 1px solid var(--border-control);
   border-radius: 7px;
   box-shadow: 0 1px 3px rgb(30 45 36 / 6%);
+}
+.input-intent {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.input-intent select {
+  height: 28px;
+  padding: 0 26px 0 8px;
+  border: 1px solid var(--border-control);
+  border-radius: 6px;
+  color: var(--text-primary);
+  background: var(--surface-primary);
+  font: inherit;
 }
 .chat-composer form.running {
   grid-template-columns: 34px minmax(0, 1fr) 34px 34px;
@@ -1382,6 +1465,11 @@ body,
   border-color: #75423e;
   background: #2c211f;
 }
+:root[data-theme="dark"] .tool-decision,
+:root[data-theme="dark"] .queued-branch {
+  border-color: #6d5c34;
+  background: #29261d;
+}
 :root[data-theme="dark"] .assistant-message-actions button:hover,
 :root[data-theme="dark"] .attachment-strip button:hover,
 :root[data-theme="dark"] .icon-button:hover {
@@ -1410,6 +1498,12 @@ body,
   .run-recovery-actions {
     grid-column: 2;
     flex-wrap: wrap;
+  }
+  .tool-decision {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+  .tool-decision-actions {
+    grid-column: 2;
   }
   .chat-composer form.running.has-draft {
     grid-template-columns: 34px minmax(0, 1fr) repeat(3, 30px);

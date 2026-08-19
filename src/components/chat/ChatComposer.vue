@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { Paperclip, Pause, Send, Square, X } from "lucide-vue-next";
 
-import type { AttachmentDto } from "../../bindings";
+import type { AttachmentDto, PendingInputIntent } from "../../bindings";
 
-defineProps<{
+const props = defineProps<{
   attachments: AttachmentDto[];
   running: boolean;
   attaching: boolean;
   busy: boolean;
 }>();
 const text = defineModel<string>({ default: "" });
+const intent = defineModel<PendingInputIntent>("intent", { default: "append" });
 const emit = defineEmits<{
-  send: [text: string];
+  send: [text: string, intent: PendingInputIntent];
   attach: [];
   removeAttachment: [id: string];
   cancel: [];
@@ -19,8 +20,8 @@ const emit = defineEmits<{
 }>();
 
 function submit() {
-  if (!text.value.trim()) return;
-  emit("send", text.value);
+  if (!text.value.trim() && !props.attachments.length) return;
+  emit("send", text.value, intent.value);
   text.value = "";
 }
 </script>
@@ -39,13 +40,21 @@ function submit() {
         </button>
       </span>
     </div>
+    <label v-if="running && (text.trim() || attachments.length)" class="input-intent">
+      <span>Send as</span>
+      <select v-model="intent" aria-label="How to apply this message">
+        <option value="append">Add to current run</option>
+        <option value="fork">Fork from checkpoint</option>
+        <option value="cancel_and_replace">Replace current run</option>
+      </select>
+    </label>
     <form :class="{ running, 'has-draft': text.trim() }" @submit.prevent="submit">
       <button
         class="icon-button"
         type="button"
         title="Attach image"
         aria-label="Attach image"
-        :disabled="attaching || running"
+        :disabled="attaching"
         @click="emit('attach')"
       >
         <Paperclip :size="17" />
@@ -69,7 +78,7 @@ function submit() {
         <Pause :size="15" fill="currentColor" />
       </button>
       <button
-        v-if="running && text.trim()"
+        v-if="running && (text.trim() || attachments.length)"
         class="icon-button send-button"
         type="submit"
         title="Add message to current run"
@@ -95,7 +104,7 @@ function submit() {
         type="submit"
         title="Send message"
         aria-label="Send message"
-        :disabled="!text.trim()"
+        :disabled="!text.trim() && !attachments.length"
       >
         <Send :size="16" />
       </button>

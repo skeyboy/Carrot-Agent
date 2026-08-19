@@ -8,6 +8,8 @@ import type {
   ChatStartRequest,
   ChatStartResponse,
   PendingInputIntent,
+  PendingInputDto,
+  RecoveryResolution,
   RunItemDto,
 } from "../bindings";
 
@@ -17,6 +19,14 @@ export type ProviderEvent =
   | { type: "reasoning_delta"; delta: string }
   | { type: "reasoning_completed"; duration_ms: number }
   | { type: "tool_call"; call_id: string; name: string; arguments: unknown }
+  | {
+      type: "approval_required";
+      tool_execution_id: string;
+      call_id: string;
+      name: string;
+      risk: string;
+      arguments: unknown;
+    }
   | {
       type: "completed";
       response_id: string;
@@ -39,7 +49,7 @@ const previewHandlers = new Set<(event: ChatEvent) => void>();
 interface PreviewRun {
   id: string;
   conversationId: string;
-  status: "running" | "paused" | "interrupted" | "recovery_required";
+  status: "running" | "paused" | "suspended" | "interrupted" | "recovery_required";
   timers: Array<ReturnType<typeof setTimeout>>;
 }
 const previewRuns = new Map<string, PreviewRun>();
@@ -216,6 +226,7 @@ export async function getChatSnapshot(conversationId: string): Promise<ChatSnaps
       events: [],
       toolExecutions: [],
       pendingInputs: [],
+      approvals: [],
     };
   }
   return resultData(await commands.chatSnapshot(conversationId));
@@ -253,7 +264,10 @@ export async function resumeChat(
 ): Promise<ChatStartResponse> {
   if (!isTauri()) {
     const run = previewRuns.get(runId);
-    if (!run || (run.status !== "paused" && run.status !== "interrupted")) {
+    if (
+      !run ||
+      (run.status !== "paused" && run.status !== "suspended" && run.status !== "interrupted")
+    ) {
       throw new Error("This run cannot be resumed safely");
     }
     run.status = "running";
@@ -279,9 +293,50 @@ export async function queueChatInput(
   runId: string,
   text: string,
   intent: PendingInputIntent = "append",
+  attachmentIds: string[] = [],
+): Promise<PendingInputDto> {
+  if (!isTauri()) {
+    return {
+      id: crypto.randomUUID(),
+      runId,
+      intent,
+      status: "pending",
+      text,
+      hasAttachments: attachmentIds.length > 0,
+      childRunId: null,
+    };
+  }
+  return resultData(await commands.chatInput({ runId, text, intent, attachmentIds }));
+}
+
+export async function startBranch(
+  pendingInputId: string,
+  conversationId: string,
+): Promise<ChatStartResponse> {
+  if (!isTauri()) throw new Error("Branch preview requires the desktop runtime");
+  return resultData(await commands.chatBranch({ pendingInputId, conversationId }));
+}
+
+export async function resolveToolApproval(
+  runId: string,
+  conversationId: string,
+  toolExecutionId: string,
+  approved: boolean,
+): Promise<ChatStartResponse> {
+  if (!isTauri()) return { runId };
+  return resultData(
+    await commands.chatToolApproval({ runId, conversationId, toolExecutionId, approved }),
+  );
+}
+
+export async function resolveToolRecovery(
+  runId: string,
+  toolExecutionId: string,
+  resolution: RecoveryResolution,
+  note: string | null = null,
 ): Promise<void> {
   if (!isTauri()) return;
-  resultData(await commands.chatInput({ runId, text, intent }));
+  resultData(await commands.chatToolRecovery({ runId, toolExecutionId, resolution, note }));
 }
 
 export async function subscribeToChatEvents(handler: (event: ChatEvent) => void) {

@@ -14,7 +14,7 @@ use crate::domain::conversation::{Conversation, ConversationChanges, NewConversa
 use crate::domain::provider::{
     NewProviderProfile, ProviderCatalog, ProviderProfile, ProviderProfileChanges,
 };
-use crate::domain::run::{PendingInput, PendingInputIntent};
+use crate::domain::run::{PendingInput, PendingInputIntent, RecoveryResolution};
 use crate::domain::settings::AppSettings;
 use crate::domain::storage::{ConversationStore, RunStore};
 use crate::error::AppError;
@@ -527,44 +527,10 @@ impl CarrotService {
             ));
         }
 
-        let available = self.attachments.list(&conversation_id).await?;
-        let mut content = Vec::new();
-        if !text.is_empty() {
-            content.push(MessageContent::Text { text });
-        }
-        for id in attachment_ids {
-            let attachment = available
-                .iter()
-                .find(|attachment| attachment.id == id)
-                .ok_or_else(|| AppError::not_found("attachment", &id))?;
-            let bytes = tokio::fs::read(self.attachment_path.join(&attachment.relative_path))
-                .await
-                .map_err(|error| AppError::Storage {
-                    message: error.to_string(),
-                })?;
-            content.push(MessageContent::ImageDataUrl {
-                data_url: format!(
-                    "data:{};base64,{}",
-                    attachment.media_type,
-                    base64::engine::general_purpose::STANDARD.encode(bytes)
-                ),
-                detail: ImageDetail::Auto,
-            });
-        }
-
-        let api_key = match self.credential(&profile.id).await {
-            Ok(secret) => secret,
-            Err(_) if is_loopback_base_url(&profile.base_url) => "local-provider".to_owned(),
-            Err(error) => return Err(error),
-        };
-        let provider: Arc<dyn LlmProvider> = match profile.protocol {
-            crate::domain::provider::ProviderProtocol::Responses => Arc::new(
-                OpenAiResponsesProvider::new(api_key, profile.base_url.clone()),
-            ),
-            crate::domain::provider::ProviderProtocol::ChatCompletions => {
-                Arc::new(OpenAiChatProvider::new(api_key, profile.base_url.clone()))
-            }
-        };
+        let user_message = self
+            .build_user_message(&conversation_id, text, attachment_ids)
+            .await?;
+        let provider = self.provider_for_profile(&profile).await?;
         let cancellation = self.cancellation.begin_run(run_id.clone()).await;
         let (lease_stop, lease_task) = start_lease_heartbeat(
             self.runs.clone(),
@@ -581,10 +547,9 @@ impl CarrotService {
             model: conversation.default_model,
             runtime_instance_id: self.runtime_instance_id.clone(),
             replaces_run_id,
-            user_message: ProviderMessage {
-                role: MessageRole::User,
-                content,
-            },
+            parent_run_id: None,
+            source_pending_input_id: None,
+            user_message,
             max_model_steps: settings.max_model_steps,
             request_timeout: std::time::Duration::from_secs(u64::from(
                 settings.request_timeout_seconds,
@@ -630,6 +595,7 @@ impl CarrotService {
         if !matches!(
             run.status,
             crate::domain::run::RunStatus::Paused
+                | crate::domain::run::RunStatus::Suspended
                 | crate::domain::run::RunStatus::Interrupted
                 | crate::domain::run::RunStatus::RecoveryRequired
         ) {
@@ -650,6 +616,17 @@ impl CarrotService {
         Ok(())
     }
 
+    pub async fn prepare_for_suspend(&self) -> Result<(), AppError> {
+        let run_ids = self.cancellation.active_run_ids().await;
+        for run_id in &run_ids {
+            self.runs.request_pause(run_id).await?;
+        }
+        for run_id in run_ids {
+            self.cancellation.pause_run(&run_id).await;
+        }
+        Ok(())
+    }
+
     pub async fn pause_chat(&self, run_id: &str) -> Result<(), AppError> {
         self.runs.request_pause(run_id).await?;
         if self.cancellation.pause_run(run_id).await {
@@ -664,15 +641,20 @@ impl CarrotService {
         run_id: &str,
         intent: PendingInputIntent,
         text: String,
+        attachment_ids: Vec<String>,
     ) -> Result<PendingInput, AppError> {
         let text = text.trim().to_owned();
-        if text.is_empty() {
+        if text.is_empty() && attachment_ids.is_empty() {
             return Err(AppError::invalid_input("pending input cannot be empty"));
         }
-        let message = ProviderMessage {
-            role: MessageRole::User,
-            content: vec![MessageContent::Text { text }],
-        };
+        let run = self
+            .runs
+            .get_run(run_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("run", run_id))?;
+        let message = self
+            .build_user_message(&run.conversation_id, text, attachment_ids)
+            .await?;
         self.runs
             .enqueue_input(
                 run_id,
@@ -682,6 +664,97 @@ impl CarrotService {
             )
             .await
             .map_err(AppError::from)
+    }
+
+    pub async fn branch_chat(
+        &self,
+        run_id: String,
+        pending_input_id: &str,
+        conversation_id: &str,
+        events: tokio::sync::mpsc::Sender<ProviderEvent>,
+    ) -> Result<String, AppError> {
+        let pending = self
+            .runs
+            .get_pending_input(pending_input_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("pending input", pending_input_id))?;
+        if pending.status != "pending" || pending.intent == PendingInputIntent::Append {
+            return Err(AppError::invalid_input(
+                "pending input is not available for branching",
+            ));
+        }
+        let parent = self
+            .runs
+            .get_run(&pending.run_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("run", &pending.run_id))?;
+        if parent.conversation_id != conversation_id {
+            return Err(AppError::invalid_input(
+                "pending input does not belong to the requested conversation",
+            ));
+        }
+        let message: ProviderMessage = serde_json::from_value(pending.content.clone())
+            .map_err(|error| AppError::invalid_input(error.to_string()))?;
+        let profile = parent.provider_snapshot.clone();
+        let provider = self.provider_for_profile(&profile).await?;
+        let cancellation = self.cancellation.begin_run(run_id.clone()).await;
+        let (lease_stop, lease_task) = start_lease_heartbeat(
+            self.runs.clone(),
+            run_id.clone(),
+            self.runtime_instance_id.clone(),
+        );
+        let settings = self.settings().await;
+        let runtime = AgentRuntime::new(self.runs.clone(), ToolRegistry::built_in());
+        let input = RuntimeInput {
+            run_id: run_id.clone(),
+            conversation_id: conversation_id.to_owned(),
+            strategy: parent.strategy,
+            provider_profile: profile,
+            model: parent.model,
+            runtime_instance_id: self.runtime_instance_id.clone(),
+            replaces_run_id: (pending.intent == PendingInputIntent::CancelAndReplace)
+                .then(|| parent.id.clone()),
+            parent_run_id: (pending.intent == PendingInputIntent::Fork).then(|| parent.id.clone()),
+            source_pending_input_id: Some(pending.id),
+            user_message: message,
+            max_model_steps: settings.max_model_steps,
+            request_timeout: std::time::Duration::from_secs(u64::from(
+                settings.request_timeout_seconds,
+            )),
+        };
+        let result = runtime
+            .run(provider, input, events, cancellation.clone())
+            .await;
+        lease_stop.cancel();
+        let _ = lease_task.await;
+        self.cancellation.finish_run(&run_id).await;
+        result.map_err(|error| AppError::internal(error.to_string()))?;
+        Ok(conversation_id.to_owned())
+    }
+
+    pub async fn resolve_tool_approval(
+        &self,
+        run_id: &str,
+        execution_id: &str,
+        approved: bool,
+    ) -> Result<(), AppError> {
+        self.runs
+            .resolve_tool_approval(run_id, execution_id, approved)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn resolve_tool_recovery(
+        &self,
+        run_id: &str,
+        execution_id: &str,
+        resolution: RecoveryResolution,
+        note: Option<String>,
+    ) -> Result<(), AppError> {
+        self.runs
+            .resolve_recovery(run_id, execution_id, resolution, note)
+            .await?;
+        Ok(())
     }
 
     pub async fn resume_chat(
@@ -701,19 +774,7 @@ impl CarrotService {
             ));
         }
         let profile = existing.provider_snapshot.clone();
-        let api_key = match self.credential(&profile.id).await {
-            Ok(secret) => secret,
-            Err(_) if is_loopback_base_url(&profile.base_url) => "local-provider".to_owned(),
-            Err(error) => return Err(error),
-        };
-        let provider: Arc<dyn LlmProvider> = match profile.protocol {
-            crate::domain::provider::ProviderProtocol::Responses => Arc::new(
-                OpenAiResponsesProvider::new(api_key, profile.base_url.clone()),
-            ),
-            crate::domain::provider::ProviderProtocol::ChatCompletions => {
-                Arc::new(OpenAiChatProvider::new(api_key, profile.base_url.clone()))
-            }
-        };
+        let provider = self.provider_for_profile(&profile).await?;
         let claimed = self
             .runs
             .claim_resume(&run_id, &self.runtime_instance_id)
@@ -734,6 +795,8 @@ impl CarrotService {
             model: claimed.model,
             runtime_instance_id: self.runtime_instance_id.clone(),
             replaces_run_id: None,
+            parent_run_id: None,
+            source_pending_input_id: None,
             user_message: ProviderMessage {
                 role: MessageRole::User,
                 content: Vec::new(),
@@ -783,6 +846,61 @@ impl CarrotService {
         let reference = self.credential_reference(provider_id).await?;
         self.credentials.delete(&reference).await?;
         Ok(())
+    }
+
+    async fn build_user_message(
+        &self,
+        conversation_id: &str,
+        text: String,
+        attachment_ids: Vec<String>,
+    ) -> Result<ProviderMessage, AppError> {
+        let available = self.attachments.list(conversation_id).await?;
+        let mut content = Vec::new();
+        if !text.is_empty() {
+            content.push(MessageContent::Text { text });
+        }
+        for id in attachment_ids {
+            let attachment = available
+                .iter()
+                .find(|attachment| attachment.id == id)
+                .ok_or_else(|| AppError::not_found("attachment", &id))?;
+            let bytes = tokio::fs::read(self.attachment_path.join(&attachment.relative_path))
+                .await
+                .map_err(|error| AppError::Storage {
+                    message: error.to_string(),
+                })?;
+            content.push(MessageContent::ImageDataUrl {
+                data_url: format!(
+                    "data:{};base64,{}",
+                    attachment.media_type,
+                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                ),
+                detail: ImageDetail::Auto,
+            });
+        }
+        Ok(ProviderMessage {
+            role: MessageRole::User,
+            content,
+        })
+    }
+
+    async fn provider_for_profile(
+        &self,
+        profile: &ProviderProfile,
+    ) -> Result<Arc<dyn LlmProvider>, AppError> {
+        let api_key = match self.credential(&profile.id).await {
+            Ok(secret) => secret,
+            Err(_) if is_loopback_base_url(&profile.base_url) => "local-provider".to_owned(),
+            Err(error) => return Err(error),
+        };
+        Ok(match profile.protocol {
+            crate::domain::provider::ProviderProtocol::Responses => Arc::new(
+                OpenAiResponsesProvider::new(api_key, profile.base_url.clone()),
+            ),
+            crate::domain::provider::ProviderProtocol::ChatCompletions => {
+                Arc::new(OpenAiChatProvider::new(api_key, profile.base_url.clone()))
+            }
+        })
     }
 
     async fn credential_reference(&self, provider_id: &str) -> Result<String, AppError> {

@@ -6,20 +6,21 @@ use uuid::Uuid;
 
 use crate::domain::run::{
     AgentRun, ChatSnapshot, CommitResult, LeaseRecovery, NewRun, NewRunItem, NewToolExecution,
-    PendingInput, PendingInputIntent, PlanDraft, RunEvent, RunItem, RunPhase, RunStatus,
-    RunTransition, ToolExecution, ToolExecutionResult,
+    PendingInput, PendingInputIntent, PlanDraft, RecoveryResolution, RunEvent, RunItem, RunPhase,
+    RunStatus, RunTransition, ToolApproval, ToolExecution, ToolExecutionResult,
 };
 use crate::domain::storage::{RunStore, StoreError};
 
 use super::database::Database;
 use super::models::{
     NewPendingInputRow, NewPlanRow, NewPlanStepRow, NewRunEventRow, NewRunItemRow, NewRunRow,
-    NewRunSnapshotRow, NewToolExecutionRow, PendingInputRow, RunChangeset, RunEventRow, RunItemRow,
-    RunRow, ToolExecutionRow,
+    NewRunSnapshotRow, NewToolApprovalRow, NewToolExecutionRow, PendingInputRow, RunChangeset,
+    RunEventRow, RunItemRow, RunRow, ToolApprovalRow, ToolExecutionRow,
 };
 use super::now_ms;
 use super::schema::{
-    items, pending_inputs, plan_steps, plans, run_events, run_snapshots, runs, tool_executions,
+    items, pending_inputs, plan_steps, plans, run_events, run_snapshots, runs, tool_approvals,
+    tool_executions,
 };
 
 #[derive(Clone)]
@@ -65,11 +66,15 @@ impl RunStore for SqliteRunStore {
         let item_id = Uuid::now_v7().to_string();
         let first_event_id = Uuid::now_v7().to_string();
         let second_event_id = Uuid::now_v7().to_string();
+        let parent_event_id = Uuid::now_v7().to_string();
         let run_id = input.id.clone();
         let run_row = NewRunRow {
             id: &input.id,
             conversation_id: &input.conversation_id,
-            parent_run_id: input.replaces_run_id.as_deref(),
+            parent_run_id: input
+                .parent_run_id
+                .as_deref()
+                .or(input.replaces_run_id.as_deref()),
             status: "running",
             phase: "routing",
             strategy: input.strategy.as_str(),
@@ -117,21 +122,67 @@ impl RunStore for SqliteRunStore {
         connection
             .transaction::<_, diesel::result::Error, _>(async |connection| {
                 if let Some(replaced_run_id) = input.replaces_run_id.as_deref() {
-                    let replaceable = runs::table
+                    let parent = runs::table
                         .filter(runs::id.eq(replaced_run_id))
                         .filter(runs::conversation_id.eq(&input.conversation_id))
                         .filter(runs::status.eq_any(["paused", "cancelled"]))
-                        .select(runs::id)
-                        .first::<String>(connection)
+                        .select(RunRow::as_select())
+                        .first::<RunRow>(connection)
                         .await
                         .optional()?;
-                    if replaceable.is_none() {
+                    let Some(parent) = parent else {
                         return Err(diesel::result::Error::RollbackTransaction);
-                    }
+                    };
                     diesel::update(items::table.filter(items::run_id.eq(replaced_run_id)))
                         .set(items::status.eq("superseded"))
                         .execute(connection)
                         .await?;
+                    commit_parent_branch_state(
+                        connection,
+                        &parent,
+                        &parent_event_id,
+                        "cancelled",
+                        "run_replaced_from_inbox",
+                        &input.id,
+                        now,
+                    )
+                    .await?;
+                } else if let Some(parent_run_id) = input.parent_run_id.as_deref() {
+                    let parent = runs::table
+                        .filter(runs::id.eq(parent_run_id))
+                        .filter(runs::conversation_id.eq(&input.conversation_id))
+                        .filter(runs::status.eq("paused"))
+                        .select(RunRow::as_select())
+                        .first::<RunRow>(connection)
+                        .await?;
+                    commit_parent_branch_state(
+                        connection,
+                        &parent,
+                        &parent_event_id,
+                        "suspended",
+                        "run_forked_from_inbox",
+                        &input.id,
+                        now,
+                    )
+                    .await?;
+                }
+                if let Some(pending_input_id) = input.source_pending_input_id.as_deref() {
+                    let pending = pending_inputs::table
+                        .filter(pending_inputs::id.eq(pending_input_id))
+                        .filter(pending_inputs::status.eq("pending"))
+                        .filter(
+                            pending_inputs::run_id.eq(input
+                                .parent_run_id
+                                .as_deref()
+                                .or(input.replaces_run_id.as_deref())
+                                .unwrap_or_default()),
+                        )
+                        .select(PendingInputRow::as_select())
+                        .first::<PendingInputRow>(connection)
+                        .await?;
+                    if pending.content_json != user_content_json || pending.intent == "append" {
+                        return Err(diesel::result::Error::RollbackTransaction);
+                    }
                 }
                 diesel::insert_into(runs::table)
                     .values(run_row)
@@ -145,6 +196,19 @@ impl RunStore for SqliteRunStore {
                     .values(first_event)
                     .execute(connection)
                     .await?;
+                if let Some(pending_input_id) = input.source_pending_input_id.as_deref() {
+                    diesel::update(
+                        pending_inputs::table.filter(pending_inputs::id.eq(pending_input_id)),
+                    )
+                    .set((
+                        pending_inputs::status.eq("consumed"),
+                        pending_inputs::item_id.eq(Some(&item_id)),
+                        pending_inputs::child_run_id.eq(Some(&input.id)),
+                        pending_inputs::consumed_at_ms.eq(Some(now)),
+                    ))
+                    .execute(connection)
+                    .await?;
+                }
                 diesel::insert_into(run_events::table)
                     .values(second_event)
                     .execute(connection)
@@ -516,11 +580,13 @@ impl RunStore for SqliteRunStore {
             .map_err(query_error)?;
         let mut events_output = Vec::new();
         let mut tools_output = Vec::new();
-        let mut latest_run = None;
+        let mut latest_active_run = None;
         for row in run_rows {
             let run_id = row.id.clone();
             let run = AgentRun::try_from(row)?;
-            latest_run = Some(run);
+            if !run.status.is_terminal() {
+                latest_active_run = Some(run);
+            }
             events_output.extend(
                 run_events::table
                     .filter(run_events::run_id.eq(&run_id))
@@ -548,7 +614,7 @@ impl RunStore for SqliteRunStore {
         }
         Ok(ChatSnapshot {
             conversation_id: conversation_id.to_owned(),
-            active_run: latest_run.filter(|run| !run.status.is_terminal()),
+            active_run: latest_active_run,
             items,
             events: events_output,
             tool_executions: tools_output,
@@ -563,6 +629,17 @@ impl RunStore for SqliteRunStore {
                 .into_iter()
                 .map(PendingInput::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
+            approvals: tool_approvals::table
+                .inner_join(runs::table.on(runs::id.eq(tool_approvals::run_id)))
+                .filter(runs::conversation_id.eq(conversation_id))
+                .order(tool_approvals::requested_at_ms.asc())
+                .select(ToolApprovalRow::as_select())
+                .load::<ToolApprovalRow>(&mut connection)
+                .await
+                .map_err(query_error)?
+                .into_iter()
+                .map(ToolApproval::from)
+                .collect(),
         })
     }
 
@@ -639,19 +716,28 @@ impl RunStore for SqliteRunStore {
                     .select(RunRow::as_select())
                     .first::<RunRow>(connection)
                     .await?;
-                if !matches!(row.status.as_str(), "paused" | "interrupted") {
+                if !matches!(row.status.as_str(), "paused" | "suspended" | "interrupted") {
                     return Err(diesel::result::Error::RollbackTransaction);
                 }
-                let unsafe_tool = tool_executions::table
+                let unsafe_tools = tool_executions::table
                     .filter(tool_executions::run_id.eq(run_id))
                     .filter(tool_executions::status.eq_any(["prepared", "executing"]))
                     .filter(tool_executions::risk.eq_any(["external_side_effect", "dangerous"]))
-                    .select(tool_executions::id)
-                    .first::<String>(connection)
-                    .await
-                    .optional()?;
-                if unsafe_tool.is_some() {
-                    return Err(diesel::result::Error::RollbackTransaction);
+                    .select((tool_executions::id, tool_executions::status))
+                    .load::<(String, String)>(connection)
+                    .await?;
+                for (execution_id, status) in unsafe_tools {
+                    let approved = tool_approvals::table
+                        .filter(tool_approvals::tool_execution_id.eq(&execution_id))
+                        .filter(tool_approvals::status.eq("approved"))
+                        .select(tool_approvals::id)
+                        .first::<String>(connection)
+                        .await
+                        .optional()?
+                        .is_some();
+                    if status == "executing" || !approved {
+                        return Err(diesel::result::Error::RollbackTransaction);
+                    }
                 }
                 let next_seq = row.last_event_seq + 1;
                 let payload = serde_json::json!({
@@ -735,6 +821,7 @@ impl RunStore for SqliteRunStore {
                         content_json: &content_json,
                         created_at_ms: now,
                         consumed_at_ms: None,
+                        child_run_id: None,
                     })
                     .execute(connection)
                     .await?;
@@ -761,11 +848,13 @@ impl RunStore for SqliteRunStore {
         Ok(PendingInput {
             id,
             run_id: run_id.to_owned(),
+            item_id: None,
             intent,
             status: "pending".to_owned(),
             content,
             created_at_ms: now,
             consumed_at_ms: None,
+            child_run_id: None,
         })
     }
 
@@ -818,6 +907,23 @@ impl RunStore for SqliteRunStore {
             });
             if unknown_side_effect {
                 let reason = "tool side effect outcome is unknown; review before continuing";
+                let mut connection = self.database.connection().await.map_err(unavailable)?;
+                diesel::update(
+                    tool_executions::table
+                        .filter(tool_executions::run_id.eq(&row.id))
+                        .filter(tool_executions::status.eq("executing"))
+                        .filter(
+                            tool_executions::risk.eq_any(["external_side_effect", "dangerous"]),
+                        ),
+                )
+                .set((
+                    tool_executions::reconciliation_status.eq("pending"),
+                    tool_executions::reconciliation_note.eq(Some(reason)),
+                ))
+                .execute(&mut connection)
+                .await
+                .map_err(query_error)?;
+                drop(connection);
                 self.transition(
                     &row.id,
                     RunTransition {
@@ -910,9 +1016,371 @@ impl RunStore for SqliteRunStore {
         .map(|updated| updated == 1)
         .map_err(query_error)
     }
+
+    async fn request_tool_approval(
+        &self,
+        run_id: &str,
+        execution_id: &str,
+    ) -> Result<ToolApproval, StoreError> {
+        let now = now_ms()?;
+        let approval_id = Uuid::now_v7().to_string();
+        let event_id = Uuid::now_v7().to_string();
+        let mut connection = self.database.connection().await.map_err(unavailable)?;
+        connection
+            .transaction::<_, diesel::result::Error, _>(async |connection| {
+                let row = runs::table
+                    .filter(runs::id.eq(run_id))
+                    .select(RunRow::as_select())
+                    .first::<RunRow>(connection)
+                    .await?;
+                let execution = tool_executions::table
+                    .filter(tool_executions::id.eq(execution_id))
+                    .filter(tool_executions::run_id.eq(run_id))
+                    .filter(tool_executions::status.eq("prepared"))
+                    .select(ToolExecutionRow::as_select())
+                    .first::<ToolExecutionRow>(connection)
+                    .await?;
+                let next_seq = row.last_event_seq + 1;
+                diesel::insert_into(tool_approvals::table)
+                    .values(NewToolApprovalRow {
+                        id: &approval_id,
+                        run_id,
+                        tool_execution_id: execution_id,
+                        call_id: &execution.call_id,
+                        arguments_hash: &execution.arguments_hash,
+                        status: "pending",
+                        requested_at_ms: now,
+                        resolved_at_ms: None,
+                    })
+                    .execute(connection)
+                    .await?;
+                let payload = serde_json::json!({
+                    "approvalId": approval_id,
+                    "toolExecutionId": execution_id,
+                    "callId": execution.call_id,
+                    "toolName": execution.tool_name,
+                    "risk": execution.risk,
+                    "argumentsHash": execution.arguments_hash,
+                });
+                let payload_json = payload.to_string();
+                diesel::insert_into(run_events::table)
+                    .values(NewRunEventRow {
+                        id: &event_id,
+                        run_id,
+                        seq: next_seq,
+                        kind: "tool_approval_requested",
+                        payload_json: &payload_json,
+                        persisted_at_ms: now,
+                    })
+                    .execute(connection)
+                    .await?;
+                update_run_state(
+                    connection,
+                    &row,
+                    next_seq,
+                    "waiting_for_approval",
+                    "tool_prepare",
+                    Some("tool approval required"),
+                    now,
+                )
+                .await?;
+                Ok(ToolApproval {
+                    id: approval_id.clone(),
+                    run_id: run_id.to_owned(),
+                    tool_execution_id: execution_id.to_owned(),
+                    call_id: execution.call_id,
+                    arguments_hash: execution.arguments_hash,
+                    status: "pending".to_owned(),
+                    requested_at_ms: now,
+                    resolved_at_ms: None,
+                })
+            })
+            .await
+            .map_err(transaction_error)
+    }
+
+    async fn resolve_tool_approval(
+        &self,
+        run_id: &str,
+        execution_id: &str,
+        approved: bool,
+    ) -> Result<RunEvent, StoreError> {
+        let now = now_ms()?;
+        let event_id = Uuid::now_v7().to_string();
+        let status = if approved { "approved" } else { "denied" };
+        let mut connection = self.database.connection().await.map_err(unavailable)?;
+        connection
+            .transaction::<_, diesel::result::Error, _>(async |connection| {
+                let row = runs::table
+                    .filter(runs::id.eq(run_id))
+                    .filter(runs::status.eq("waiting_for_approval"))
+                    .select(RunRow::as_select())
+                    .first::<RunRow>(connection)
+                    .await?;
+                let updated = diesel::update(
+                    tool_approvals::table
+                        .filter(tool_approvals::run_id.eq(run_id))
+                        .filter(tool_approvals::tool_execution_id.eq(execution_id))
+                        .filter(tool_approvals::status.eq("pending")),
+                )
+                .set((
+                    tool_approvals::status.eq(status),
+                    tool_approvals::resolved_at_ms.eq(Some(now)),
+                ))
+                .execute(connection)
+                .await?;
+                if updated != 1 {
+                    return Err(diesel::result::Error::RollbackTransaction);
+                }
+                if !approved {
+                    let output = serde_json::json!({
+                        "ok": false,
+                        "error": "tool execution denied by user",
+                    });
+                    let output_json = output.to_string();
+                    diesel::update(
+                        tool_executions::table
+                            .filter(tool_executions::id.eq(execution_id))
+                            .filter(tool_executions::status.eq("prepared")),
+                    )
+                    .set((
+                        tool_executions::status.eq("cancelled"),
+                        tool_executions::output_json.eq(Some(&output_json)),
+                        tool_executions::error_message.eq(Some("tool execution denied by user")),
+                        tool_executions::completed_at_ms.eq(Some(now)),
+                    ))
+                    .execute(connection)
+                    .await?;
+                    let execution = tool_executions::table
+                        .filter(tool_executions::id.eq(execution_id))
+                        .select(ToolExecutionRow::as_select())
+                        .first::<ToolExecutionRow>(connection)
+                        .await?;
+                    let item_id = Uuid::now_v7().to_string();
+                    let item_seq = next_item_seq(connection, run_id).await?;
+                    diesel::insert_into(items::table)
+                        .values(NewRunItemRow {
+                            id: &item_id,
+                            run_id,
+                            seq: item_seq,
+                            kind: "function_call_output",
+                            role: Some("tool"),
+                            status: "committed",
+                            content_json: &output_json,
+                            provider_item_id: None,
+                            call_id: Some(&execution.call_id),
+                            created_at_ms: now,
+                        })
+                        .execute(connection)
+                        .await?;
+                }
+                let next_seq = row.last_event_seq + 1;
+                let payload = serde_json::json!({
+                    "toolExecutionId": execution_id,
+                    "decision": status,
+                });
+                let payload_json = payload.to_string();
+                diesel::insert_into(run_events::table)
+                    .values(NewRunEventRow {
+                        id: &event_id,
+                        run_id,
+                        seq: next_seq,
+                        kind: "tool_approval_resolved",
+                        payload_json: &payload_json,
+                        persisted_at_ms: now,
+                    })
+                    .execute(connection)
+                    .await?;
+                update_run_state(
+                    connection,
+                    &row,
+                    next_seq,
+                    if approved { "paused" } else { "interrupted" },
+                    "none",
+                    Some(if approved {
+                        "approved tool ready to resume"
+                    } else {
+                        "tool execution denied"
+                    }),
+                    now,
+                )
+                .await?;
+                Ok(RunEvent {
+                    id: event_id.clone(),
+                    run_id: run_id.to_owned(),
+                    seq: next_seq,
+                    kind: "tool_approval_resolved".to_owned(),
+                    payload,
+                    persisted_at_ms: now,
+                })
+            })
+            .await
+            .map_err(transaction_error)
+    }
+
+    async fn pending_tool_executions(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<ToolExecution>, StoreError> {
+        let mut connection = self.database.connection().await.map_err(unavailable)?;
+        tool_executions::table
+            .inner_join(
+                tool_approvals::table.on(tool_approvals::tool_execution_id.eq(tool_executions::id)),
+            )
+            .filter(tool_executions::run_id.eq(run_id))
+            .filter(tool_executions::status.eq("prepared"))
+            .filter(tool_approvals::status.eq("approved"))
+            .order(tool_executions::prepared_at_ms.asc())
+            .select(ToolExecutionRow::as_select())
+            .load::<ToolExecutionRow>(&mut connection)
+            .await
+            .map_err(query_error)?
+            .into_iter()
+            .map(ToolExecution::try_from)
+            .collect()
+    }
+
+    async fn resolve_recovery(
+        &self,
+        run_id: &str,
+        execution_id: &str,
+        resolution: RecoveryResolution,
+        note: Option<String>,
+    ) -> Result<RunEvent, StoreError> {
+        self.resolve_recovery_transaction(run_id, execution_id, resolution, note)
+            .await
+    }
+
+    async fn get_pending_input(&self, input_id: &str) -> Result<Option<PendingInput>, StoreError> {
+        let mut connection = self.database.connection().await.map_err(unavailable)?;
+        pending_inputs::table
+            .filter(pending_inputs::id.eq(input_id))
+            .select(PendingInputRow::as_select())
+            .first::<PendingInputRow>(&mut connection)
+            .await
+            .optional()
+            .map_err(query_error)?
+            .map(PendingInput::try_from)
+            .transpose()
+    }
 }
 
 impl SqliteRunStore {
+    async fn resolve_recovery_transaction(
+        &self,
+        run_id: &str,
+        execution_id: &str,
+        resolution: RecoveryResolution,
+        note: Option<String>,
+    ) -> Result<RunEvent, StoreError> {
+        let now = now_ms()?;
+        let event_id = Uuid::now_v7().to_string();
+        let item_id = Uuid::now_v7().to_string();
+        let resolution_value = resolution.as_str();
+        let tool_status = match resolution {
+            RecoveryResolution::MarkSucceeded => "succeeded",
+            RecoveryResolution::MarkFailed => "failed",
+            RecoveryResolution::Abandon => "cancelled",
+        };
+        let run_status = if resolution == RecoveryResolution::Abandon {
+            RunStatus::Cancelled
+        } else {
+            RunStatus::Interrupted
+        };
+        let output = serde_json::json!({
+            "reconciled": true,
+            "resolution": resolution,
+            "note": note.clone(),
+        });
+        let output_json = output.to_string();
+        let mut connection = self.database.connection().await.map_err(unavailable)?;
+        connection
+            .transaction::<_, diesel::result::Error, _>(async |connection| {
+                let row = runs::table
+                    .filter(runs::id.eq(run_id))
+                    .filter(runs::status.eq("recovery_required"))
+                    .select(RunRow::as_select())
+                    .first::<RunRow>(connection)
+                    .await?;
+                let execution = tool_executions::table
+                    .filter(tool_executions::id.eq(execution_id))
+                    .filter(tool_executions::run_id.eq(run_id))
+                    .filter(tool_executions::reconciliation_status.eq("pending"))
+                    .select(ToolExecutionRow::as_select())
+                    .first::<ToolExecutionRow>(connection)
+                    .await?;
+                diesel::update(tool_executions::table.filter(tool_executions::id.eq(execution_id)))
+                    .set((
+                        tool_executions::status.eq(tool_status),
+                        tool_executions::output_json.eq(Some(&output_json)),
+                        tool_executions::error_message.eq(if tool_status == "failed" {
+                            Some("marked failed during reconciliation")
+                        } else {
+                            None
+                        }),
+                        tool_executions::completed_at_ms.eq(Some(now)),
+                        tool_executions::reconciliation_status.eq(resolution_value),
+                        tool_executions::reconciliation_note.eq(note.as_deref()),
+                    ))
+                    .execute(connection)
+                    .await?;
+                let item_seq = next_item_seq(connection, run_id).await?;
+                diesel::insert_into(items::table)
+                    .values(NewRunItemRow {
+                        id: &item_id,
+                        run_id,
+                        seq: item_seq,
+                        kind: "function_call_output",
+                        role: Some("tool"),
+                        status: "committed",
+                        content_json: &output_json,
+                        provider_item_id: None,
+                        call_id: Some(&execution.call_id),
+                        created_at_ms: now,
+                    })
+                    .execute(connection)
+                    .await?;
+                let next_seq = row.last_event_seq + 1;
+                let payload = serde_json::json!({
+                    "toolExecutionId": execution_id,
+                    "resolution": resolution,
+                    "itemId": item_id,
+                });
+                let payload_json = payload.to_string();
+                diesel::insert_into(run_events::table)
+                    .values(NewRunEventRow {
+                        id: &event_id,
+                        run_id,
+                        seq: next_seq,
+                        kind: "tool_reconciliation_resolved",
+                        payload_json: &payload_json,
+                        persisted_at_ms: now,
+                    })
+                    .execute(connection)
+                    .await?;
+                update_run_state(
+                    connection,
+                    &row,
+                    next_seq,
+                    run_status.as_str(),
+                    "none",
+                    Some("tool reconciliation resolved"),
+                    now,
+                )
+                .await?;
+                Ok(RunEvent {
+                    id: event_id.clone(),
+                    run_id: run_id.to_owned(),
+                    seq: next_seq,
+                    kind: "tool_reconciliation_resolved".to_owned(),
+                    payload,
+                    persisted_at_ms: now,
+                })
+            })
+            .await
+            .map_err(transaction_error)
+    }
+
     async fn consume_append_inputs_transaction(
         &self,
         run_id: &str,
@@ -1054,6 +1522,9 @@ impl SqliteRunStore {
                         prepared_at_ms: now,
                         started_at_ms: None,
                         completed_at_ms: None,
+                        idempotency_key: execution.idempotency_key.as_deref(),
+                        reconciliation_status: "not_required",
+                        reconciliation_note: None,
                     })
                     .execute(connection)
                     .await?;
@@ -1362,6 +1833,41 @@ async fn next_item_seq(
         + 1)
 }
 
+async fn commit_parent_branch_state(
+    connection: &mut super::database::DbConnection,
+    row: &RunRow,
+    event_id: &str,
+    status: &str,
+    event_kind: &str,
+    child_run_id: &str,
+    now: i64,
+) -> Result<(), diesel::result::Error> {
+    let event_seq = row.last_event_seq + 1;
+    let payload = serde_json::json!({"childRunId": child_run_id});
+    let payload_json = payload.to_string();
+    diesel::insert_into(run_events::table)
+        .values(NewRunEventRow {
+            id: event_id,
+            run_id: &row.id,
+            seq: event_seq,
+            kind: event_kind,
+            payload_json: &payload_json,
+            persisted_at_ms: now,
+        })
+        .execute(connection)
+        .await?;
+    update_run_state(
+        connection,
+        row,
+        event_seq,
+        status,
+        "none",
+        Some(event_kind),
+        now,
+    )
+    .await
+}
+
 fn active_status(row: &RunRow) -> &str {
     if row.status == "pause_requested" {
         "pause_requested"
@@ -1486,7 +1992,8 @@ mod tests {
         ProviderCapabilities, ProviderKind, ProviderProfile, ProviderProtocol,
     };
     use crate::domain::run::{
-        NewRun, NewToolExecution, PendingInputIntent, RunPhase, RunStatus, RunTransition,
+        NewRun, NewToolExecution, PendingInputIntent, RecoveryResolution, RunPhase, RunStatus,
+        RunTransition,
     };
     use crate::domain::settings::RunStrategy;
     use crate::domain::storage::{ConversationStore, RunStore};
@@ -1600,6 +2107,7 @@ mod tests {
                     arguments: serde_json::json!({"message": "hello"}),
                     arguments_hash: "hash".to_owned(),
                     retryable: false,
+                    idempotency_key: Some("send_message:hash".to_owned()),
                 },
             )
             .await
@@ -1625,6 +2133,227 @@ mod tests {
         let run = store.get_run("run-unsafe").await.unwrap().unwrap();
         assert_eq!(run.status, RunStatus::RecoveryRequired);
         assert!(store.claim_resume("run-unsafe", "runtime-2").await.is_err());
+
+        store
+            .resolve_recovery(
+                "run-unsafe",
+                "execution-1",
+                RecoveryResolution::MarkSucceeded,
+                Some("verified against the upstream operation log".to_owned()),
+            )
+            .await
+            .unwrap();
+        let resumed = store.claim_resume("run-unsafe", "runtime-2").await.unwrap();
+        assert_eq!(resumed.status, RunStatus::Running);
+        let snapshot = store.snapshot(&conversation_id).await.unwrap();
+        assert_eq!(snapshot.tool_executions[0].status, "succeeded");
+        assert_eq!(
+            snapshot.tool_executions[0].reconciliation_status,
+            "resolved_succeeded"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn forced_exit_after_pause_request_recovers_as_paused() {
+        let (store, conversation_id) = setup("forced-pause").await;
+        store
+            .start(new_run("run-sleep", &conversation_id))
+            .await
+            .unwrap();
+        store.request_pause("run-sleep").await.unwrap();
+        {
+            use diesel::prelude::*;
+            use diesel_async::RunQueryDsl;
+            let mut connection = store.database.connection().await.unwrap();
+            diesel::update(crate::persistence::schema::runs::table)
+                .set(crate::persistence::schema::runs::lease_expires_at_ms.eq(Some(0_i64)))
+                .execute(&mut connection)
+                .await
+                .unwrap();
+        }
+
+        let recovered = store
+            .recover_expired_leases("runtime-after-wake")
+            .await
+            .unwrap();
+        assert_eq!(recovered[0].status, RunStatus::Paused);
+        assert_eq!(
+            store.get_run("run-sleep").await.unwrap().unwrap().status,
+            RunStatus::Paused
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fork_consumes_attachment_inbox_and_preserves_parent() {
+        let (store, conversation_id) = setup("fork").await;
+        store
+            .start(new_run("parent", &conversation_id))
+            .await
+            .unwrap();
+        pause_run(&store, "parent").await;
+        let content = serde_json::json!({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Try another direction"},
+                {"type": "image_data_url", "data_url": "data:image/png;base64,AA==", "detail": "auto"}
+            ],
+        });
+        let pending = store
+            .enqueue_input("parent", PendingInputIntent::Fork, content.clone())
+            .await
+            .unwrap();
+        let mut child = new_run("child", &conversation_id);
+        child.parent_run_id = Some("parent".to_owned());
+        child.source_pending_input_id = Some(pending.id.clone());
+        child.user_content = content;
+        store.start(child).await.unwrap();
+
+        assert_eq!(
+            store.get_run("parent").await.unwrap().unwrap().status,
+            RunStatus::Suspended
+        );
+        let consumed = store.get_pending_input(&pending.id).await.unwrap().unwrap();
+        assert_eq!(consumed.status, "consumed");
+        assert_eq!(consumed.child_run_id.as_deref(), Some("child"));
+        let items = store.conversation_items(&conversation_id).await.unwrap();
+        assert!(items.iter().any(|item| {
+            item.run_id == "child" && item.content["content"][1]["type"] == "image_data_url"
+        }));
+        store
+            .transition(
+                "child",
+                RunTransition {
+                    status: RunStatus::Completed,
+                    phase: RunPhase::None,
+                    event_kind: "run_completed".to_owned(),
+                    payload: serde_json::json!({}),
+                    stop_reason: Some("completed".to_owned()),
+                },
+            )
+            .await
+            .unwrap();
+        let snapshot = store.snapshot(&conversation_id).await.unwrap();
+        assert_eq!(snapshot.active_run.unwrap().id, "parent");
+        assert_eq!(
+            store
+                .claim_resume("parent", "runtime-2")
+                .await
+                .unwrap()
+                .status,
+            RunStatus::Running
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancel_and_replace_supersedes_parent_from_exact_inbox_record() {
+        let (store, conversation_id) = setup("replace-inbox").await;
+        store
+            .start(new_run("parent", &conversation_id))
+            .await
+            .unwrap();
+        pause_run(&store, "parent").await;
+        let content = serde_json::json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "Corrected request"}],
+        });
+        let pending = store
+            .enqueue_input(
+                "parent",
+                PendingInputIntent::CancelAndReplace,
+                content.clone(),
+            )
+            .await
+            .unwrap();
+        let mut replacement = new_run("replacement", &conversation_id);
+        replacement.replaces_run_id = Some("parent".to_owned());
+        replacement.source_pending_input_id = Some(pending.id.clone());
+        replacement.user_content = content;
+        store.start(replacement).await.unwrap();
+
+        assert_eq!(
+            store.get_run("parent").await.unwrap().unwrap().status,
+            RunStatus::Cancelled
+        );
+        let items = store.conversation_items(&conversation_id).await.unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].run_id, "replacement");
+        assert_eq!(
+            store
+                .get_pending_input(&pending.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .child_run_id
+                .as_deref(),
+            Some("replacement")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn approval_is_durable_and_releases_only_the_matching_tool() {
+        let (store, conversation_id) = setup("approval").await;
+        store
+            .start(new_run("run-approval", &conversation_id))
+            .await
+            .unwrap();
+        store
+            .prepare_tool(
+                "run-approval",
+                NewToolExecution {
+                    id: "write-1".to_owned(),
+                    call_id: "call-write".to_owned(),
+                    tool_name: "write_file".to_owned(),
+                    risk: "dangerous".to_owned(),
+                    arguments: serde_json::json!({"path": "report.txt"}),
+                    arguments_hash: "write-hash".to_owned(),
+                    retryable: true,
+                    idempotency_key: Some("write_file:report-v1".to_owned()),
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .request_tool_approval("run-approval", "write-1")
+            .await
+            .unwrap();
+        let snapshot = store.snapshot(&conversation_id).await.unwrap();
+        assert_eq!(snapshot.approvals[0].status, "pending");
+        assert_eq!(
+            snapshot.active_run.unwrap().status,
+            RunStatus::WaitingForApproval
+        );
+
+        store
+            .resolve_tool_approval("run-approval", "write-1", true)
+            .await
+            .unwrap();
+        store
+            .claim_resume("run-approval", "runtime-2")
+            .await
+            .unwrap();
+        let executable = store.pending_tool_executions("run-approval").await.unwrap();
+        assert_eq!(executable.len(), 1);
+        assert_eq!(
+            executable[0].idempotency_key.as_deref(),
+            Some("write_file:report-v1")
+        );
+    }
+
+    async fn pause_run(store: &SqliteRunStore, run_id: &str) {
+        store.request_pause(run_id).await.unwrap();
+        store
+            .transition(
+                run_id,
+                RunTransition {
+                    status: RunStatus::Paused,
+                    phase: RunPhase::None,
+                    event_kind: "run_paused".to_owned(),
+                    payload: serde_json::json!({}),
+                    stop_reason: Some("paused".to_owned()),
+                },
+            )
+            .await
+            .unwrap();
     }
 
     async fn setup(name: &str) -> (SqliteRunStore, String) {
@@ -1668,6 +2397,8 @@ mod tests {
             model: "fake".to_owned(),
             runtime_instance_id: "runtime-1".to_owned(),
             replaces_run_id: None,
+            parent_run_id: None,
+            source_pending_input_id: None,
             user_content: serde_json::json!({
                 "role": "user",
                 "content": [{"type": "text", "text": "Hello"}],

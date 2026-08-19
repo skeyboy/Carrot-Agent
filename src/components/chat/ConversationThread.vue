@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { MessageSquare } from "lucide-vue-next";
-import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 
 import {
   cancelChat,
@@ -10,16 +10,29 @@ import {
   removeAttachment,
   pauseChat,
   queueChatInput,
+  resolveToolApproval,
+  resolveToolRecovery,
   resumeChat,
+  startBranch,
   startChat,
   subscribeToChatEvents,
 } from "../../api/chat";
 import type { ChatEvent } from "../../api/chat";
-import type { ActiveRunDto, AttachmentDto, ChatSnapshotDto, ConversationDto } from "../../bindings";
+import type {
+  ActiveRunDto,
+  AttachmentDto,
+  ChatSnapshotDto,
+  ConversationDto,
+  PendingInputDto,
+  PendingInputIntent,
+  ToolApprovalDto,
+  ToolExecutionDto,
+} from "../../bindings";
 import AgentRunStatus from "./AgentRunStatus.vue";
 import ChatComposer from "./ChatComposer.vue";
 import ConversationMessage from "./ConversationMessage.vue";
 import RunRecoveryBanner from "./RunRecoveryBanner.vue";
+import ToolApprovalBanner from "./ToolApprovalBanner.vue";
 
 interface DisplayMessage {
   id: string;
@@ -42,11 +55,28 @@ const activeRunId = ref<string | null>(null);
 const activeRun = ref<ActiveRunDto | null>(null);
 const toolCount = ref(0);
 const draft = ref("");
+const inputIntent = ref<PendingInputIntent>("append");
 const activeInput = ref<{ text: string; attachmentIds: string[] } | null>(null);
 const replacementRunId = ref<string | null>(null);
 const controlBusy = ref(false);
 const starting = ref(false);
 const attaching = ref(false);
+const pendingInputs = ref<PendingInputDto[]>([]);
+const approvals = ref<ToolApprovalDto[]>([]);
+const toolExecutions = ref<ToolExecutionDto[]>([]);
+const pendingBranch = ref<{ inputId: string; messageId: string } | null>(null);
+const pendingApproval = computed(() =>
+  approvals.value.find((approval) => approval.status === "pending"),
+);
+const approvalExecution = computed(() =>
+  toolExecutions.value.find((execution) => execution.id === pendingApproval.value?.toolExecutionId),
+);
+const uncertainTool = computed(() =>
+  toolExecutions.value.find((execution) => execution.reconciliationStatus === "pending"),
+);
+const queuedBranch = computed(() =>
+  pendingInputs.value.find((input) => input.status === "pending" && input.intent !== "append"),
+);
 let unlisten: (() => void) | undefined;
 let bufferedEvents: ChatEvent[] = [];
 let hydrating = true;
@@ -101,12 +131,14 @@ async function discardAttachment(id: string) {
   }
 }
 
-async function send(text: string) {
+async function send(text: string, intent: PendingInputIntent) {
   if (activeRunId.value) {
     try {
       controlBusy.value = true;
-      await queueChatInput(activeRunId.value, text);
-      messages.value.push({
+      const attachmentIds = selectedAttachments.value.map((item) => item.id);
+      const input = await queueChatInput(activeRunId.value, text, intent, attachmentIds);
+      pendingInputs.value.push(input);
+      const message = {
         id: crypto.randomUUID(),
         runId: activeRunId.value,
         role: "user",
@@ -115,7 +147,14 @@ async function send(text: string) {
         reasoning: "",
         reasoningDurationMs: 0,
         reasoningRunning: false,
-      });
+      } satisfies DisplayMessage;
+      messages.value.push(message);
+      selectedAttachments.value = [];
+      inputIntent.value = "append";
+      if (intent !== "append") {
+        pendingBranch.value = { inputId: input.id, messageId: message.id };
+        await pauseChat(activeRunId.value);
+      }
       scrollToLatest();
     } catch (cause) {
       draft.value = text;
@@ -240,6 +279,14 @@ function applyEvent(payload: ChatEvent) {
       reasoningRunning: false,
     });
     scrollToLatest();
+  } else if (event.type === "approval_required") {
+    activeRunId.value = null;
+    if (activeRun.value) {
+      activeRun.value.status = "waiting_for_approval";
+      activeRun.value.phase = "tool_prepare";
+      activeRun.value.stopReason = "A tool action requires approval.";
+    }
+    void refreshSnapshot();
   } else if (event.type === "failed") {
     activeRunId.value = null;
     activeRun.value = null;
@@ -265,7 +312,8 @@ function applyEvent(payload: ChatEvent) {
       activeRun.value.stopReason = "Paused at a durable checkpoint.";
     }
     controlBusy.value = false;
-    void refreshSnapshot();
+    if (pendingBranch.value) void launchPendingBranch();
+    else void refreshSnapshot();
   } else if (event.type === "cancelled") {
     restoreActiveInput();
     replacementRunId.value = payload.runId;
@@ -351,12 +399,111 @@ function applySnapshot(snapshot: ChatSnapshotDto) {
       ? snapshot.activeRun.id
       : null;
   toolCount.value = snapshot.toolExecutions.length;
+  toolExecutions.value = snapshot.toolExecutions;
+  pendingInputs.value = snapshot.pendingInputs;
+  approvals.value = snapshot.approvals;
   if (
     recoveryPoll &&
     (!snapshot.activeRun || !["running", "pause_requested"].includes(snapshot.activeRun.status))
   ) {
     clearInterval(recoveryPoll);
     recoveryPoll = undefined;
+  }
+}
+
+async function launchPendingBranch(inputId = pendingBranch.value?.inputId) {
+  if (!inputId) return;
+  const pending = pendingInputs.value.find((item) => item.id === inputId);
+  try {
+    controlBusy.value = true;
+    const started = await startBranch(inputId, props.conversation.id);
+    const optimistic = messages.value.find(
+      (message) => message.id === pendingBranch.value?.messageId,
+    );
+    if (optimistic) optimistic.runId = started.runId;
+    else if (pending) {
+      messages.value.push({
+        id: crypto.randomUUID(),
+        runId: started.runId,
+        role: "user",
+        text: pending.text || (pending.hasAttachments ? "Image attachment" : ""),
+        settled: true,
+        reasoning: "",
+        reasoningDurationMs: 0,
+        reasoningRunning: false,
+      });
+    }
+    messages.value.push({
+      id: crypto.randomUUID(),
+      runId: started.runId,
+      role: "assistant",
+      text: "",
+      settled: false,
+      reasoning: "",
+      reasoningDurationMs: 0,
+      reasoningRunning: false,
+    });
+    pendingBranch.value = null;
+    activeRunId.value = started.runId;
+    activeRun.value = {
+      id: started.runId,
+      status: "running",
+      phase: "routing",
+      lastEventSeq: "0",
+      stopReason: null,
+      canResume: false,
+    };
+  } catch (cause) {
+    emit("error", errorMessage(cause));
+    await refreshSnapshot();
+  } finally {
+    controlBusy.value = false;
+  }
+}
+
+async function decideTool(approved: boolean) {
+  if (!activeRun.value || !pendingApproval.value) return;
+  try {
+    controlBusy.value = true;
+    const resumed = await resolveToolApproval(
+      activeRun.value.id,
+      props.conversation.id,
+      pendingApproval.value.toolExecutionId,
+      approved,
+    );
+    activeRunId.value = resumed.runId;
+    activeRun.value.status = "running";
+    activeRun.value.phase = "routing";
+    approvals.value = approvals.value.map((approval) =>
+      approval.id === pendingApproval.value?.id
+        ? { ...approval, status: approved ? "approved" : "denied" }
+        : approval,
+    );
+  } catch (cause) {
+    emit("error", errorMessage(cause));
+    await refreshSnapshot();
+  } finally {
+    controlBusy.value = false;
+  }
+}
+
+async function reconcile(resolution: "mark_succeeded" | "mark_failed") {
+  if (!activeRun.value || !uncertainTool.value) return;
+  try {
+    controlBusy.value = true;
+    const runId = activeRun.value.id;
+    await resolveToolRecovery(runId, uncertainTool.value.id, resolution);
+    const resumed = await resumeChat(runId, props.conversation.id);
+    activeRunId.value = resumed.runId;
+    activeRun.value.status = "running";
+    activeRun.value.phase = "routing";
+    activeRun.value.canResume = false;
+    activeRun.value.stopReason = null;
+  } catch (cause) {
+    emit("error", errorMessage(cause));
+    await refreshSnapshot();
+  } finally {
+    controlBusy.value = false;
   }
 }
 
@@ -503,18 +650,50 @@ function errorMessage(cause: unknown) {
     class="thread-shell"
     :class="{
       'has-recovery':
-        activeRun && ['paused', 'interrupted', 'recovery_required'].includes(activeRun.status),
+        (activeRun &&
+          ['paused', 'suspended', 'interrupted', 'recovery_required'].includes(activeRun.status)) ||
+        pendingApproval,
     }"
   >
     <AgentRunStatus :run="activeRun" :tool-count="toolCount" />
-    <RunRecoveryBanner
-      v-if="activeRun && ['paused', 'interrupted', 'recovery_required'].includes(activeRun.status)"
-      :run="activeRun"
-      :busy="controlBusy"
-      @resume="resume"
-      @edit="editInterruptedInput"
-      @abandon="abandonRecovery"
-    />
+    <div
+      v-if="
+        (activeRun &&
+          ['paused', 'suspended', 'interrupted', 'recovery_required'].includes(activeRun.status)) ||
+        (pendingApproval && approvalExecution)
+      "
+      class="run-notices"
+    >
+      <RunRecoveryBanner
+        v-if="
+          activeRun &&
+          ['paused', 'suspended', 'interrupted', 'recovery_required'].includes(activeRun.status)
+        "
+        :run="activeRun"
+        :busy="controlBusy"
+        :uncertain-tool="uncertainTool"
+        @resume="resume"
+        @edit="editInterruptedInput"
+        @abandon="abandonRecovery"
+        @reconcile="reconcile"
+      />
+      <aside v-if="activeRun?.status === 'paused' && queuedBranch" class="queued-branch">
+        <div>
+          <strong>Queued {{ queuedBranch.intent.replace(/_/g, " ") }}</strong>
+          <span>{{ queuedBranch.text || "Image attachment" }}</span>
+        </div>
+        <button type="button" :disabled="controlBusy" @click="launchPendingBranch(queuedBranch.id)">
+          Continue
+        </button>
+      </aside>
+      <ToolApprovalBanner
+        v-if="pendingApproval && approvalExecution"
+        :approval="pendingApproval"
+        :execution="approvalExecution"
+        :busy="controlBusy"
+        @decide="decideTool"
+      />
+    </div>
     <div v-if="messages.length === 0" class="empty-thread">
       <MessageSquare :size="24" />
       <h2>No messages yet</h2>
@@ -534,6 +713,7 @@ function errorMessage(cause: unknown) {
     </div>
     <ChatComposer
       v-model="draft"
+      v-model:intent="inputIntent"
       :attachments="selectedAttachments"
       :running="activeRunId !== null"
       :attaching="attaching"

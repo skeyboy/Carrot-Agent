@@ -3,7 +3,9 @@ use specta::Type;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::application::CarrotService;
-use crate::domain::run::{ChatSnapshot, PendingInputIntent, RunPhase, RunStatus};
+use crate::domain::run::{
+    ChatSnapshot, PendingInputIntent, RecoveryResolution, RunPhase, RunStatus,
+};
 use crate::error::AppError;
 use crate::providers::ProviderEvent;
 
@@ -37,6 +39,32 @@ pub struct ChatInputRequest {
     pub run_id: String,
     pub intent: PendingInputIntent,
     pub text: String,
+    pub attachment_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatBranchRequest {
+    pub pending_input_id: String,
+    pub conversation_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolApprovalRequest {
+    pub run_id: String,
+    pub conversation_id: String,
+    pub tool_execution_id: String,
+    pub approved: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRecoveryRequest {
+    pub run_id: String,
+    pub tool_execution_id: String,
+    pub resolution: RecoveryResolution,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -56,6 +84,7 @@ pub struct ChatSnapshotDto {
     pub events: Vec<RunEventDto>,
     pub tool_executions: Vec<ToolExecutionDto>,
     pub pending_inputs: Vec<PendingInputDto>,
+    pub approvals: Vec<ToolApprovalDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -77,6 +106,18 @@ pub struct PendingInputDto {
     pub intent: PendingInputIntent,
     pub status: String,
     pub text: String,
+    pub has_attachments: bool,
+    pub child_run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolApprovalDto {
+    pub id: String,
+    pub run_id: String,
+    pub tool_execution_id: String,
+    pub status: String,
+    pub requested_at_ms: String,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -114,6 +155,9 @@ pub struct ToolExecutionDto {
     pub arguments_json: String,
     pub output_json: Option<String>,
     pub error_message: Option<String>,
+    pub idempotency_key: Option<String>,
+    pub reconciliation_status: String,
+    pub reconciliation_note: Option<String>,
 }
 
 impl From<ChatSnapshot> for ChatSnapshotDto {
@@ -121,7 +165,10 @@ impl From<ChatSnapshot> for ChatSnapshotDto {
         Self {
             conversation_id: snapshot.conversation_id,
             active_run: snapshot.active_run.map(|run| {
-                let can_resume = matches!(run.status, RunStatus::Paused | RunStatus::Interrupted);
+                let can_resume = matches!(
+                    run.status,
+                    RunStatus::Paused | RunStatus::Suspended | RunStatus::Interrupted
+                );
                 ActiveRunDto {
                     id: run.id,
                     status: run.status,
@@ -169,6 +216,9 @@ impl From<ChatSnapshot> for ChatSnapshotDto {
                     arguments_json: tool.arguments.to_string(),
                     output_json: tool.output.map(|output| output.to_string()),
                     error_message: tool.error_message,
+                    idempotency_key: tool.idempotency_key,
+                    reconciliation_status: tool.reconciliation_status,
+                    reconciliation_note: tool.reconciliation_note,
                 })
                 .collect(),
             pending_inputs: snapshot
@@ -180,6 +230,19 @@ impl From<ChatSnapshot> for ChatSnapshotDto {
                     intent: input.intent,
                     status: input.status,
                     text: message_text(&input.content),
+                    has_attachments: message_has_attachments(&input.content),
+                    child_run_id: input.child_run_id,
+                })
+                .collect(),
+            approvals: snapshot
+                .approvals
+                .into_iter()
+                .map(|approval| ToolApprovalDto {
+                    id: approval.id,
+                    run_id: approval.run_id,
+                    tool_execution_id: approval.tool_execution_id,
+                    status: approval.status,
+                    requested_at_ms: approval.requested_at_ms.to_string(),
                 })
                 .collect(),
         }
@@ -262,11 +325,121 @@ pub async fn chat_pause(service: State<'_, CarrotService>, run_id: String) -> Re
 pub async fn chat_input(
     service: State<'_, CarrotService>,
     request: ChatInputRequest,
+) -> Result<PendingInputDto, AppError> {
+    service
+        .enqueue_chat_input(
+            &request.run_id,
+            request.intent,
+            request.text,
+            request.attachment_ids,
+        )
+        .await
+        .map(|input| PendingInputDto {
+            id: input.id,
+            run_id: input.run_id,
+            intent: input.intent,
+            status: input.status,
+            text: message_text(&input.content),
+            has_attachments: message_has_attachments(&input.content),
+            child_run_id: input.child_run_id,
+        })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn chat_branch(
+    app: AppHandle,
+    _service: State<'_, CarrotService>,
+    request: ChatBranchRequest,
+) -> Result<ChatStartResponse, AppError> {
+    let run_id = uuid::Uuid::now_v7().to_string();
+    let response = ChatStartResponse {
+        run_id: run_id.clone(),
+    };
+    tauri::async_runtime::spawn(async move {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(64);
+        let event_app = app.clone();
+        let event_run_id = run_id.clone();
+        let conversation_id = request.conversation_id.clone();
+        let forwarder = tauri::async_runtime::spawn(async move {
+            while let Some(event) = receiver.recv().await {
+                let _ = event_app.emit(
+                    CHAT_EVENT_NAME,
+                    ChatEventDto {
+                        run_id: event_run_id.clone(),
+                        conversation_id: conversation_id.clone(),
+                        event,
+                    },
+                );
+            }
+        });
+        let service = app.state::<CarrotService>();
+        if let Err(error) = service
+            .branch_chat(
+                run_id.clone(),
+                &request.pending_input_id,
+                &request.conversation_id,
+                sender,
+            )
+            .await
+        {
+            let _ = app.emit(
+                CHAT_EVENT_NAME,
+                ChatEventDto {
+                    run_id,
+                    conversation_id: request.conversation_id,
+                    event: ProviderEvent::Failed {
+                        message: error.to_string(),
+                    },
+                },
+            );
+        }
+        let _ = forwarder.await;
+    });
+    Ok(response)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn chat_tool_approval(
+    app: AppHandle,
+    service: State<'_, CarrotService>,
+    request: ToolApprovalRequest,
+) -> Result<ChatStartResponse, AppError> {
+    service
+        .resolve_tool_approval(
+            &request.run_id,
+            &request.tool_execution_id,
+            request.approved,
+        )
+        .await?;
+    let response = ChatStartResponse {
+        run_id: request.run_id.clone(),
+    };
+    spawn_resume(
+        app,
+        ChatResumeRequest {
+            run_id: request.run_id,
+            conversation_id: request.conversation_id,
+        },
+    );
+    Ok(response)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn chat_tool_recovery(
+    service: State<'_, CarrotService>,
+    request: ToolRecoveryRequest,
 ) -> Result<(), AppError> {
     service
-        .enqueue_chat_input(&request.run_id, request.intent, request.text)
+        .resolve_tool_recovery(
+            &request.run_id,
+            &request.tool_execution_id,
+            request.resolution,
+            request.note,
+        )
         .await
-        .map(|_| ())
 }
 
 #[tauri::command]
@@ -280,7 +453,13 @@ pub async fn chat_resume(
     let response = ChatStartResponse {
         run_id: run_id.clone(),
     };
+    spawn_resume(app, request);
+    Ok(response)
+}
+
+fn spawn_resume(app: AppHandle, request: ChatResumeRequest) {
     tauri::async_runtime::spawn(async move {
+        let run_id = request.run_id.clone();
         let (sender, mut receiver) = tokio::sync::mpsc::channel(64);
         let event_app = app.clone();
         let event_run_id = run_id.clone();
@@ -315,7 +494,6 @@ pub async fn chat_resume(
         }
         let _ = forwarder.await;
     });
-    Ok(response)
 }
 
 #[tauri::command]
@@ -343,4 +521,15 @@ fn message_text(value: &serde_json::Value) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn message_has_attachments(value: &serde_json::Value) -> bool {
+    value
+        .get("content")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|parts| {
+            parts.iter().any(|part| {
+                part.get("type").and_then(serde_json::Value::as_str) == Some("image_data_url")
+            })
+        })
 }

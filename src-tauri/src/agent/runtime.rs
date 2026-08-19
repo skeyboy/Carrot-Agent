@@ -18,7 +18,7 @@ use crate::providers::runtime::{
     LlmProvider, MessageContent, MessageRole, ProviderEvent, ProviderInputItem, ProviderMessage,
     ProviderRequest,
 };
-use crate::tools::{ToolCapabilities, ToolError, ToolRegistry, ToolRisk};
+use crate::tools::{ToolCapabilities, ToolError, ToolExecutionContext, ToolRegistry, ToolRisk};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -32,6 +32,8 @@ pub enum RuntimeError {
     Cancelled,
     #[error("run was paused")]
     Paused,
+    #[error("run is waiting for tool approval")]
+    WaitingForApproval,
 }
 
 pub struct RuntimeInput {
@@ -42,6 +44,8 @@ pub struct RuntimeInput {
     pub model: String,
     pub runtime_instance_id: String,
     pub replaces_run_id: Option<String>,
+    pub parent_run_id: Option<String>,
+    pub source_pending_input_id: Option<String>,
     pub user_message: ProviderMessage,
     pub max_model_steps: u16,
     pub request_timeout: Duration,
@@ -75,6 +79,8 @@ impl AgentRuntime {
                 model: input.model.clone(),
                 runtime_instance_id: input.runtime_instance_id.clone(),
                 replaces_run_id: input.replaces_run_id.clone(),
+                parent_run_id: input.parent_run_id.clone(),
+                source_pending_input_id: input.source_pending_input_id.clone(),
                 user_content,
             })
             .await?;
@@ -88,6 +94,9 @@ impl AgentRuntime {
             }
             result => result,
         };
+        if matches!(result, Err(RuntimeError::WaitingForApproval)) {
+            return Ok(());
+        }
         if let Err(error) = &result {
             let (status, event_kind) = match error {
                 RuntimeError::Cancelled => (RunStatus::Cancelled, "run_cancelled"),
@@ -142,6 +151,9 @@ impl AgentRuntime {
             }
             result => result,
         };
+        if matches!(result, Err(RuntimeError::WaitingForApproval)) {
+            return Ok(());
+        }
         if let Err(error) = &result {
             let (status, event_kind) = match error {
                 RuntimeError::Cancelled => (RunStatus::Cancelled, "run_cancelled"),
@@ -198,6 +210,9 @@ impl AgentRuntime {
                 .await?;
         }
 
+        if !create_plan {
+            self.execute_approved_tools(input, &cancellation).await?;
+        }
         let mut provider_input = self.replay_input(&input.conversation_id).await?;
         let tools = if input.provider_profile.capabilities.tools {
             self.tools.definitions()
@@ -392,7 +407,19 @@ impl AgentRuntime {
                         });
                 let serialized = serde_json::to_vec(&call.arguments)
                     .map_err(|error| RuntimeError::Provider(error.to_string()))?;
+                let arguments_hash = format!("{:x}", Sha256::digest(serialized));
                 let execution_id = Uuid::now_v7().to_string();
+                let idempotency_key = self
+                    .tools
+                    .idempotency_key(
+                        &call.name,
+                        &call.arguments,
+                        format!(
+                            "execution:{}:{}:{arguments_hash}",
+                            input.run_id, call.call_id
+                        ),
+                    )
+                    .map_err(|error| RuntimeError::Provider(error.to_string()))?;
                 self.store
                     .prepare_tool(
                         &input.run_id,
@@ -402,11 +429,28 @@ impl AgentRuntime {
                             tool_name: call.name.clone(),
                             risk: capabilities.risk.as_str().to_owned(),
                             arguments: call.arguments.clone(),
-                            arguments_hash: format!("{:x}", Sha256::digest(serialized)),
+                            arguments_hash: arguments_hash.clone(),
                             retryable: capabilities.idempotent && capabilities.reconcile,
+                            idempotency_key: Some(idempotency_key.clone()),
                         },
                     )
                     .await?;
+                if capabilities.risk != ToolRisk::ReadOnly {
+                    self.store
+                        .request_tool_approval(&input.run_id, &execution_id)
+                        .await?;
+                    events
+                        .send(ProviderEvent::ApprovalRequired {
+                            tool_execution_id: execution_id,
+                            call_id: call.call_id,
+                            name: call.name,
+                            risk: capabilities.risk.as_str().to_owned(),
+                            arguments: call.arguments,
+                        })
+                        .await
+                        .map_err(|_| RuntimeError::Provider("event receiver closed".to_owned()))?;
+                    return Err(RuntimeError::WaitingForApproval);
+                }
                 self.store
                     .mark_tool_executing(&input.run_id, &execution_id)
                     .await?;
@@ -415,9 +459,12 @@ impl AgentRuntime {
                 } else {
                     CancellationToken::new()
                 };
-                let execution = self
-                    .tools
-                    .execute(&call.name, call.arguments.clone(), tool_token);
+                let execution = self.tools.execute(
+                    &call.name,
+                    call.arguments.clone(),
+                    ToolExecutionContext { idempotency_key },
+                    tool_token,
+                );
                 let result = if capabilities.cancellable {
                     match tokio::time::timeout(
                         input.request_timeout.min(Duration::from_secs(30)),
@@ -463,6 +510,73 @@ impl AgentRuntime {
             }
         }
         Err(RuntimeError::Budget(input.max_model_steps))
+    }
+
+    async fn execute_approved_tools(
+        &self,
+        input: &RuntimeInput,
+        cancellation: &RunCancellation,
+    ) -> Result<(), RuntimeError> {
+        for execution in self.store.pending_tool_executions(&input.run_id).await? {
+            if cancellation.is_cancelled() {
+                return Err(RuntimeError::Cancelled);
+            }
+            let capabilities = self
+                .tools
+                .capabilities(&execution.tool_name)
+                .map_err(|error| RuntimeError::Provider(error.to_string()))?;
+            self.store
+                .mark_tool_executing(&input.run_id, &execution.id)
+                .await?;
+            let tool_token = if capabilities.cancellable {
+                cancellation.token().child_token()
+            } else {
+                CancellationToken::new()
+            };
+            let task = self.tools.execute(
+                &execution.tool_name,
+                execution.arguments.clone(),
+                ToolExecutionContext {
+                    idempotency_key: execution.idempotency_key.clone().ok_or_else(|| {
+                        RuntimeError::Provider(
+                            "approved tool is missing idempotency key".to_owned(),
+                        )
+                    })?,
+                },
+                tool_token,
+            );
+            let result = if capabilities.cancellable {
+                match tokio::time::timeout(input.request_timeout.min(Duration::from_secs(30)), task)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err(ToolError::Execution("tool timed out".to_owned())),
+                }
+            } else {
+                task.await
+            };
+            let (output, error_message, cancelled) = match result {
+                Ok(output) => (output, None, false),
+                Err(error) => (
+                    serde_json::json!({"ok": false, "error": error.to_string()}),
+                    Some(error.to_string()),
+                    matches!(error, ToolError::Cancelled),
+                ),
+            };
+            self.store
+                .finish_tool(
+                    &input.run_id,
+                    &execution.id,
+                    &execution.call_id,
+                    ToolExecutionResult {
+                        output: Some(output),
+                        error_message,
+                        cancelled,
+                    },
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     async fn replay_input(
@@ -767,6 +881,8 @@ mod tests {
                     model: "fake".to_owned(),
                     runtime_instance_id: "test-runtime".to_owned(),
                     replaces_run_id: None,
+                    parent_run_id: None,
+                    source_pending_input_id: None,
                     user_message: ProviderMessage {
                         role: MessageRole::User,
                         content: vec![MessageContent::Text {
@@ -904,6 +1020,8 @@ mod tests {
             model: "fake".to_owned(),
             runtime_instance_id: "test-runtime".to_owned(),
             replaces_run_id: replaces_run_id.map(str::to_owned),
+            parent_run_id: None,
+            source_pending_input_id: None,
             user_message: ProviderMessage {
                 role: MessageRole::User,
                 content: vec![MessageContent::Text {

@@ -21,6 +21,7 @@ diesel::table! {
         content_json -> Text,
         created_at_ms -> BigInt,
         consumed_at_ms -> Nullable<BigInt>,
+        child_run_id -> Nullable<Text>,
     }
 }
 
@@ -43,6 +44,19 @@ diesel::table! {
         created_at_ms -> BigInt,
         updated_at_ms -> BigInt,
         completed_at_ms -> Nullable<BigInt>,
+    }
+}
+
+diesel::table! {
+    tool_approvals (id) {
+        id -> Text,
+        run_id -> Text,
+        tool_execution_id -> Text,
+        call_id -> Text,
+        arguments_hash -> Text,
+        status -> Text,
+        requested_at_ms -> BigInt,
+        resolved_at_ms -> Nullable<BigInt>,
     }
 }
 
@@ -88,6 +102,9 @@ diesel::table! {
         prepared_at_ms -> BigInt,
         started_at_ms -> Nullable<BigInt>,
         completed_at_ms -> Nullable<BigInt>,
+        idempotency_key -> Nullable<Text>,
+        reconciliation_status -> Text,
+        reconciliation_note -> Nullable<Text>,
     }
 }
 
@@ -130,6 +147,8 @@ diesel::joinable!(items -> runs (run_id));
 diesel::joinable!(run_events -> runs (run_id));
 diesel::joinable!(pending_inputs -> runs (run_id));
 diesel::joinable!(tool_executions -> runs (run_id));
+diesel::joinable!(tool_approvals -> runs (run_id));
+diesel::joinable!(tool_approvals -> tool_executions (tool_execution_id));
 diesel::joinable!(plans -> runs (run_id));
 diesel::joinable!(plan_steps -> plans (plan_id));
 diesel::joinable!(run_snapshots -> runs (run_id));
@@ -143,6 +162,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     run_events,
     pending_inputs,
     tool_executions,
+    tool_approvals,
     plans,
     plan_steps,
     run_snapshots,

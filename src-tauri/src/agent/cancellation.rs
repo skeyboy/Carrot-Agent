@@ -95,6 +95,10 @@ impl CancellationTree {
         }
     }
 
+    pub async fn active_run_ids(&self) -> Vec<String> {
+        self.runs.lock().await.keys().cloned().collect()
+    }
+
     pub fn cancel_application(&self) {
         self.application.cancel();
     }
@@ -137,5 +141,15 @@ mod tests {
         let token = tree.begin_run("run".to_owned()).await;
         tree.cancel_application();
         assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn active_run_ids_support_lifecycle_checkpoints() {
+        let tree = CancellationTree::default();
+        tree.begin_run("first".to_owned()).await;
+        tree.begin_run("second".to_owned()).await;
+        let mut ids = tree.active_run_ids().await;
+        ids.sort();
+        assert_eq!(ids, vec!["first", "second"]);
     }
 }

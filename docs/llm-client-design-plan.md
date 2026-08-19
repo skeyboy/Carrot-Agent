@@ -4,7 +4,7 @@
 >
 > 更新日期：2026-08-19
 >
-> 当前阶段：P3 已完成，P4 会话体验、推理摘要与运行恢复切片已完成
+> 当前阶段：P4 本地 Agent 韧性功能已完成，发布签名与公证待发布环境执行
 
 ## 1. 产品目标与确认边界
 
@@ -268,13 +268,13 @@ Rust 单元测试覆盖 SSE 分片、Schema、call/output 关联、状态机、�
 | P1   | 异步 Diesel/SQLite、可恢复 Schema、模型转换、会话 CRUD、Provider 配置加载 | 已完成 |
 | P2   | 设置中心、Keychain、`openai-oxide` Responses、SSE、取消树、附件/图片      | 已完成 |
 | P3   | 工具 Registry/Executor、统一 Run 引擎、混合模式、事件与审计 UI            | 已完成 |
-| P4   | 审批、安全、持久化输入队列、暂停/恢复、崩溃恢复、macOS 打包加固           | 进行中 |
+| P4   | 审批、安全、持久化输入队列、暂停/恢复、崩溃恢复、macOS 打包加固           | 已完成 |
 | P5   | 局域网发现、配对、加密同步与冲突处理                                      | 待开始 |
 | P6   | Windows/Linux 打包、MCP、网络存储和其他扩展                               | 待开始 |
 
 每个阶段完成后更新独立阶段报告，记录交付物、验证命令、遗留风险和下一阶段计划。
 
-P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。P2 阶段结论见 [Phase 2 Provider Runtime 报告](phase-2-provider-runtime.md)，P3 结论见 [P3 Durable Agent Runtime 阶段报告](phase-3-durable-agent-runtime.md)。P4 已完成的交互切片见 [P4 会话体验与运行控制切片](phase-4-chat-experience.md) 和 [P4 主题、推理摘要与运行恢复切片](phase-4-appearance-and-reasoning.md)。当前已落地事务化 `pause_requested`、same-run resume、append inbox、lease 心跳/过期接管、未知副作用隔离和恢复 UI；`fork/cancel_and_replace` 消费、高风险审批、人工 reconcile 与系统生命周期故障注入仍待完成。
+P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。P2 阶段结论见 [Phase 2 Provider Runtime 报告](phase-2-provider-runtime.md)，P3 结论见 [P3 Durable Agent Runtime 阶段报告](phase-3-durable-agent-runtime.md)。P4 交互与恢复切片见 [P4 会话体验与运行控制切片](phase-4-chat-experience.md)、[P4 主题、推理摘要与运行恢复切片](phase-4-appearance-and-reasoning.md)，最终收口见 [P4 韧性、审批与 macOS 加固报告](phase-4-resilience-and-macos.md)。当前已落地完整 inbox 分支消费、附件持久化、高风险审批、业务幂等键、人工 reconcile、生命周期故障恢复和 macOS bundle 加固；Developer ID 签名与 Apple 公证由发布环境门禁完成。
 
 ## 16. P0 验收
 

@@ -10,8 +10,10 @@ mod settings;
 mod sync;
 mod tools;
 
+#[cfg(any(debug_assertions, test))]
 use std::path::PathBuf;
 
+#[cfg(any(debug_assertions, test))]
 use specta_typescript::Typescript;
 use tauri::Manager;
 use tauri_specta::{Builder, collect_commands};
@@ -44,14 +46,19 @@ fn ipc_builder() -> Builder<tauri::Wry> {
         commands::chat::chat_pause,
         commands::chat::chat_resume,
         commands::chat::chat_input,
+        commands::chat::chat_branch,
+        commands::chat::chat_tool_approval,
+        commands::chat::chat_tool_recovery,
         commands::chat::chat_snapshot
     ])
 }
 
+#[cfg(any(debug_assertions, test))]
 fn bindings_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/bindings.ts")
 }
 
+#[cfg(any(debug_assertions, test))]
 fn export_typescript_bindings(builder: &Builder<tauri::Wry>) {
     builder
         .export(Typescript::default(), bindings_path())
@@ -65,7 +72,7 @@ pub fn run() {
     #[cfg(debug_assertions)]
     export_typescript_bindings(&builder);
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
@@ -80,8 +87,22 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(builder.invoke_handler())
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    app.run(|app_handle, event| match event {
+        tauri::RunEvent::ExitRequested { .. } => {
+            let service = app_handle.state::<application::CarrotService>();
+            let _ = tauri::async_runtime::block_on(service.prepare_for_suspend());
+        }
+        tauri::RunEvent::Resumed => {
+            let app_handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let service = app_handle.state::<application::CarrotService>();
+                let _ = service.prepare_for_suspend().await;
+            });
+        }
+        _ => {}
+    });
 }
 
 #[cfg(test)]

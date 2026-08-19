@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use super::conversation::{Conversation, ConversationChanges, NewConversation};
 use super::run::{
     AgentRun, ChatSnapshot, CommitResult, LeaseRecovery, NewRun, NewRunItem, NewToolExecution,
-    PendingInput, PendingInputIntent, PlanDraft, RunEvent, RunItem, RunTransition,
-    ToolExecutionResult,
+    PendingInput, PendingInputIntent, PlanDraft, RecoveryResolution, RunEvent, RunItem,
+    RunTransition, ToolApproval, ToolExecution, ToolExecutionResult,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -109,4 +109,30 @@ pub trait RunStore: Send + Sync {
         run_id: &str,
         runtime_instance_id: &str,
     ) -> Result<bool, StoreError>;
+
+    async fn request_tool_approval(
+        &self,
+        run_id: &str,
+        execution_id: &str,
+    ) -> Result<ToolApproval, StoreError>;
+
+    async fn resolve_tool_approval(
+        &self,
+        run_id: &str,
+        execution_id: &str,
+        approved: bool,
+    ) -> Result<RunEvent, StoreError>;
+
+    async fn pending_tool_executions(&self, run_id: &str)
+    -> Result<Vec<ToolExecution>, StoreError>;
+
+    async fn resolve_recovery(
+        &self,
+        run_id: &str,
+        execution_id: &str,
+        resolution: RecoveryResolution,
+        note: Option<String>,
+    ) -> Result<RunEvent, StoreError>;
+
+    async fn get_pending_input(&self, input_id: &str) -> Result<Option<PendingInput>, StoreError>;
 }

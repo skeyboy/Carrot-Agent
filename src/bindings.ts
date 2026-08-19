@@ -37,7 +37,10 @@ export const commands = {
 	chatCancel: (runId: string) => typedError<null, AppError>(__TAURI_INVOKE("chat_cancel", { runId })),
 	chatPause: (runId: string) => typedError<null, AppError>(__TAURI_INVOKE("chat_pause", { runId })),
 	chatResume: (request: ChatResumeRequest) => typedError<ChatStartResponse, AppError>(__TAURI_INVOKE("chat_resume", { request })),
-	chatInput: (request: ChatInputRequest) => typedError<null, AppError>(__TAURI_INVOKE("chat_input", { request })),
+	chatInput: (request: ChatInputRequest) => typedError<PendingInputDto, AppError>(__TAURI_INVOKE("chat_input", { request })),
+	chatBranch: (request: ChatBranchRequest) => typedError<ChatStartResponse, AppError>(__TAURI_INVOKE("chat_branch", { request })),
+	chatToolApproval: (request: ToolApprovalRequest) => typedError<ChatStartResponse, AppError>(__TAURI_INVOKE("chat_tool_approval", { request })),
+	chatToolRecovery: (request: ToolRecoveryRequest) => typedError<null, AppError>(__TAURI_INVOKE("chat_tool_recovery", { request })),
 	chatSnapshot: (conversationId: string) => typedError<ChatSnapshotDto, AppError>(__TAURI_INVOKE("chat_snapshot", { conversationId })),
 };
 
@@ -71,10 +74,16 @@ export type AttachmentDto = {
 	createdAtMs: string,
 };
 
+export type ChatBranchRequest = {
+	pendingInputId: string,
+	conversationId: string,
+};
+
 export type ChatInputRequest = {
 	runId: string,
 	intent: PendingInputIntent,
 	text: string,
+	attachmentIds: string[],
 };
 
 export type ChatResumeRequest = {
@@ -89,6 +98,7 @@ export type ChatSnapshotDto = {
 	events: RunEventDto[],
 	toolExecutions: ToolExecutionDto[],
 	pendingInputs: PendingInputDto[],
+	approvals: ToolApprovalDto[],
 };
 
 export type ChatStartRequest = {
@@ -152,6 +162,8 @@ export type PendingInputDto = {
 	intent: PendingInputIntent,
 	status: string,
 	text: string,
+	hasAttachments: boolean,
+	childRunId: string | null,
 };
 
 export type PendingInputIntent = "append" | "fork" | "cancel_and_replace";
@@ -185,6 +197,8 @@ export type ProviderProfilesDto = {
 };
 
 export type ProviderProtocol = "responses" | "chat_completions";
+
+export type RecoveryResolution = "mark_succeeded" | "mark_failed" | "abandon";
 
 export type RunEventDto = {
 	runId: string,
@@ -225,6 +239,21 @@ export type SettingsSnapshotDto = {
 
 export type ThemePreference = "system" | "light" | "dark";
 
+export type ToolApprovalDto = {
+	id: string,
+	runId: string,
+	toolExecutionId: string,
+	status: string,
+	requestedAtMs: string,
+};
+
+export type ToolApprovalRequest = {
+	runId: string,
+	conversationId: string,
+	toolExecutionId: string,
+	approved: boolean,
+};
+
 export type ToolExecutionDto = {
 	id: string,
 	runId: string,
@@ -235,6 +264,16 @@ export type ToolExecutionDto = {
 	argumentsJson: string,
 	outputJson: string | null,
 	errorMessage: string | null,
+	idempotencyKey: string | null,
+	reconciliationStatus: string,
+	reconciliationNote: string | null,
+};
+
+export type ToolRecoveryRequest = {
+	runId: string,
+	toolExecutionId: string,
+	resolution: RecoveryResolution,
+	note: string | null,
 };
 
 export type UpdateConversationRequest = {

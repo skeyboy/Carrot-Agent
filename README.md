@@ -2,7 +2,7 @@
 
 Carrot is a macOS-first desktop LLM client built with Tauri 2, Rust, Vue 3, and TypeScript. The architecture keeps provider calls, credentials, tools, persistence, and synchronization behind Rust-side ports while the WebView remains a typed presentation layer.
 
-Current milestone: P3 durable Agent Runtime completed, with three P4 product-resilience slices landed. Carrot now supports OpenAI Responses and Chat Completions compatible adapters, committed Run/Item/Event history, a bounded ReAct tool loop, versioned plans, execution audit, SQLite-backed chat snapshots, transactional pause, same-run resume, durable append input, lease heartbeat/takeover, unknown side-effect isolation, recovery UI, persisted provider reasoning summaries, adaptive themes, and stable long-conversation layouts. Remaining P4 work includes fork/cancel-and-replace consumption, approval, manual side-effect reconciliation, lifecycle fault injection, and macOS packaging hardening.
+Current milestone: P4 local Agent resilience is complete. Carrot supports OpenAI Responses and Chat Completions compatible adapters, durable Run/Item/Event history, a bounded ReAct tool loop, transactional pause and same-run resume, append/fork/cancel-and-replace inbox consumption with image attachments, lease takeover, high-risk tool approval, idempotency keys, manual side-effect reconciliation, lifecycle checkpoints, adaptive themes, and hardened macOS bundle configuration. Developer ID signing and Apple notarization remain release-environment gates.
 
 ## Requirements
 
@@ -35,4 +35,5 @@ npm run check
 - [Phase 3 durable Agent Runtime report](docs/phase-3-durable-agent-runtime.md)
 - [Phase 4 chat experience slice](docs/phase-4-chat-experience.md)
 - [Phase 4 appearance, reasoning and recovery slice](docs/phase-4-appearance-and-reasoning.md)
+- [Phase 4 resilience, approval and macOS hardening report](docs/phase-4-resilience-and-macos.md)
 - [Architecture decision records](docs/adr/)
