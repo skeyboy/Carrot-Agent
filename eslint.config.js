@@ -25,6 +25,10 @@ export default tseslint.config(
     rules: {
       "vue/max-attributes-per-line": "off",
       "vue/singleline-html-element-content-newline": "off",
+      "vue/html-self-closing": [
+        "error",
+        { html: { void: "always", normal: "never", component: "always" } },
+      ],
     },
   },
   {

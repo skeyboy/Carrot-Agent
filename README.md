@@ -2,6 +2,8 @@
 
 Carrot is a macOS-first desktop LLM client built with Tauri 2, Rust, Vue 3, and TypeScript. The architecture keeps provider calls, credentials, tools, persistence, and synchronization behind Rust-side ports while the WebView remains a typed presentation layer.
 
+Current milestone: P1 local persistence and conversation workspace completed; P2 Provider integration is next.
+
 ## Requirements
 
 - Node.js 22 or newer
@@ -27,4 +29,5 @@ npm run check
 - [System design and implementation plan](docs/llm-client-design-plan.md)
 - [Agent modes and resilient session runtime](docs/agent-runtime-modes-and-resilience.md)
 - [Phase 0 baseline report](docs/phase-0-baseline.md)
+- [Phase 1 local persistence report](docs/phase-1-local-persistence.md)
 - [Architecture decision records](docs/adr/)

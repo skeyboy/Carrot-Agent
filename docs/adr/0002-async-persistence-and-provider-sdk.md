@@ -24,13 +24,13 @@ Carrot needs asynchronous application services without blocking Tauri's Tokio ru
 
 ## Initial dependency plan
 
-| Phase         | Dependency                                                | Purpose                                                         |
-| ------------- | --------------------------------------------------------- | --------------------------------------------------------------- |
-| P0 supplement | `async-trait 0.1`, `tokio 1`                              | Async ports and shared runtime contract                         |
-| P1            | `diesel 2.3`, `diesel-async 0.9`, `diesel_migrations 2.3` | SQLite repositories, blocking isolation and embedded migrations |
-| P2            | `openai-oxide 0.15` candidate                             | OpenAI Responses and compatible-provider adapter                |
+| Phase         | Dependency                                                       | Purpose                                                         |
+| ------------- | ---------------------------------------------------------------- | --------------------------------------------------------------- |
+| P0 supplement | `async-trait 0.1`, `tokio 1`                                     | Async ports and shared runtime contract                         |
+| P1            | `diesel 2.3.12`, `diesel-async 0.9.2`, `diesel_migrations 2.3.2` | SQLite repositories, blocking isolation and embedded migrations |
+| P2            | `openai-oxide 0.15` candidate                                    | OpenAI Responses and compatible-provider adapter                |
 
-Versions listed for P1/P2 are candidates observed on 2026-08-18. They are added and locked only when that phase begins, after a compatibility check with the repository toolchain.
+P1 versions are implemented and locked in `Cargo.lock`. The P2 SDK version remains a candidate until its phase-level contract tests pass.
 
 ## Consequences
 

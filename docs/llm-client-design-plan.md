@@ -1,8 +1,10 @@
 # Carrot LLM 客户端设计与实施规划
 
-> 版本：v4  
-> 更新日期：2026-08-19  
-> 当前阶段：P0 已完成，下一阶段 P1
+> 版本：v5
+>
+> 更新日期：2026-08-19
+>
+> 当前阶段：P1 已完成，下一阶段 P2
 
 ## 1. 产品目标与确认边界
 
@@ -261,7 +263,7 @@ Rust 单元测试覆盖 SSE 分片、Schema、call/output 关联、状态机、�
 | 阶段 | 内容                                                                      | 状态   |
 | ---- | ------------------------------------------------------------------------- | ------ |
 | P0   | 工程、分层、类型安全 IPC、质量门禁、ADR                                   | 已完成 |
-| P1   | 异步 Diesel/SQLite、可恢复 Schema、模型转换、会话 CRUD、Provider 配置加载 | 待开始 |
+| P1   | 异步 Diesel/SQLite、可恢复 Schema、模型转换、会话 CRUD、Provider 配置加载 | 已完成 |
 | P2   | 凭证、`openai-oxide` Adapter、Responses/compatible、SSE、附件/图片        | 待开始 |
 | P3   | 工具 Registry/Executor、统一 Run 引擎、混合模式、事件与审计 UI            | 待开始 |
 | P4   | 审批、安全、持久化输入队列、暂停/恢复、崩溃恢复、macOS 打包加固           | 待开始 |
@@ -269,6 +271,8 @@ Rust 单元测试覆盖 SSE 分片、Schema、call/output 关联、状态机、�
 | P6   | Windows/Linux 打包、MCP、网络存储和其他扩展                               | 待开始 |
 
 每个阶段完成后更新独立阶段报告，记录交付物、验证命令、遗留风险和下一阶段计划。
+
+P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。
 
 ## 16. P0 验收
 

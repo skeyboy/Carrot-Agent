@@ -10,6 +10,8 @@ pub struct Conversation {
     pub title: String,
     pub default_provider_profile_id: String,
     pub default_model: String,
+    pub archived: bool,
+    pub version: i64,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }
@@ -23,6 +25,7 @@ pub struct NewConversation {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConversationChanges {
+    pub expected_version: i64,
     pub title: Option<String>,
     pub default_provider_profile_id: Option<String>,
     pub default_model: Option<String>,

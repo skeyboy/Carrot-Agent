@@ -15,7 +15,7 @@
 - Plan-and-Execute 决定复杂目标如何拆成有状态的 PlanStep；
 - Reflection 决定何时对候选结果做有上限的质量检查与修订。
 
-本文是后续领域模型、数据库 migration、Agent 状态机、IPC 和前端交互的设计输入。P0 已完成，`agent`、`tools`、`persistence` 目前仍主要是模块边界；本文不表示 P1-P4 能力已经实现。
+本文是后续领域模型、数据库 migration、Agent 状态机、IPC 和前端交互的设计输入。P1 已完成可恢复 Schema 基础，`agent` 与 `tools` 仍主要是模块边界；本文不表示 P2-P4 Runtime 行为已经实现。
 
 ## 2. 当前项目适配结论
 

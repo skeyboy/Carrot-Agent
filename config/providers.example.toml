@@ -1,20 +1,28 @@
-# Copy this file to the application config directory during Phase 2.
+# The application copies this template to its config directory during Phase 1.
 # Credentials are referenced by key and remain in the OS credential store.
 
 [[providers]]
 id = "openai"
 label = "OpenAI"
 kind = "openai_responses"
+protocol = "responses"
 base_url = "https://api.openai.com/v1"
 default_model = "gpt-5.6"
 credential_ref = "openai-api-key"
 store_responses = true
+supports_tools = true
+supports_images = true
+supports_files = true
 
 [[providers]]
 id = "local-compatible"
 label = "Local compatible endpoint"
 kind = "openai_compatible"
+protocol = "chat_completions"
 base_url = "http://127.0.0.1:11434/v1"
 default_model = "replace-with-model-id"
 credential_ref = "local-compatible-api-key"
 store_responses = true
+supports_tools = true
+supports_images = true
+supports_files = false

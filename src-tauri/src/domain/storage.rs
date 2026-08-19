@@ -6,6 +6,8 @@ use super::conversation::{Conversation, ConversationChanges, NewConversation};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    #[error("stored record changed concurrently")]
+    Conflict,
     #[error("stored data is invalid: {message}")]
     InvalidData { message: String },
     #[error("storage is unavailable: {message}")]
@@ -26,5 +28,5 @@ pub trait ConversationStore: Send + Sync {
         changes: ConversationChanges,
     ) -> Result<Option<Conversation>, StoreError>;
 
-    async fn delete(&self, id: &str) -> Result<bool, StoreError>;
+    async fn delete(&self, id: &str, expected_version: i64) -> Result<bool, StoreError>;
 }

@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS attachments;
+DROP TABLE IF EXISTS pending_inputs;
+DROP TABLE IF EXISTS run_events;
+DROP TABLE IF EXISTS items;
+DROP TABLE IF EXISTS runs;
+DROP TABLE IF EXISTS conversations;
+DROP TABLE IF EXISTS provider_profiles;

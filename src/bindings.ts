@@ -5,16 +5,74 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	healthCheck: () => typedError<HealthStatus, AppError>(__TAURI_INVOKE("health_check")),
+	conversationList: () => typedError<ConversationDto[], AppError>(__TAURI_INVOKE("conversation_list")),
+	conversationGet: (id: string) => typedError<ConversationDto, AppError>(__TAURI_INVOKE("conversation_get", { id })),
+	conversationCreate: (request: CreateConversationRequest) => typedError<ConversationDto, AppError>(__TAURI_INVOKE("conversation_create", { request })),
+	conversationUpdate: (request: UpdateConversationRequest) => typedError<ConversationDto, AppError>(__TAURI_INVOKE("conversation_update", { request })),
+	conversationDelete: (request: DeleteConversationRequest) => typedError<null, AppError>(__TAURI_INVOKE("conversation_delete", { request })),
+	providerProfileList: () => typedError<ProviderProfilesDto, AppError>(__TAURI_INVOKE("provider_profile_list")),
+	providerProfileReload: () => typedError<ProviderProfilesDto, AppError>(__TAURI_INVOKE("provider_profile_reload")),
 };
 
 /* Types */
-export type AppError = { code: "INTERNAL"; message: string };
+export type AppError = { code: "INVALID_INPUT"; message: string } | { code: "NOT_FOUND"; message: string } | { code: "CONFLICT"; message: string } | { code: "STORAGE"; message: string } | { code: "CONFIGURATION"; message: string } | { code: "INTERNAL"; message: string };
+
+export type ConversationDto = {
+	id: string,
+	title: string,
+	defaultProviderProfileId: string,
+	defaultModel: string,
+	version: number,
+	createdAtMs: string,
+	updatedAtMs: string,
+};
+
+export type CreateConversationRequest = {
+	title: string,
+	providerProfileId: string | null,
+	model: string | null,
+};
+
+export type DeleteConversationRequest = {
+	id: string,
+	expectedVersion: number,
+};
 
 export type HealthStatus = {
 	appName: string,
 	appVersion: string,
 	platform: string,
 	phase: string,
+};
+
+export type ProviderCapabilitiesDto = {
+	tools: boolean,
+	images: boolean,
+	files: boolean,
+};
+
+export type ProviderProfileDto = {
+	id: string,
+	label: string,
+	kind: string,
+	protocol: string,
+	baseUrl: string,
+	defaultModel: string,
+	storeResponses: boolean,
+	capabilities: ProviderCapabilitiesDto,
+};
+
+export type ProviderProfilesDto = {
+	configPath: string,
+	profiles: ProviderProfileDto[],
+};
+
+export type UpdateConversationRequest = {
+	id: string,
+	expectedVersion: number,
+	title: string | null,
+	defaultProviderProfileId: string | null,
+	defaultModel: string | null,
 };
 
 /* Tauri Specta runtime */
