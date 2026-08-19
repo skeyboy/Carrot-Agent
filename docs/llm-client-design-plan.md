@@ -276,6 +276,8 @@ Rust 单元测试覆盖 SSE 分片、Schema、call/output 关联、状态机、�
 
 P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。P2 阶段结论见 [Phase 2 Provider Runtime 报告](phase-2-provider-runtime.md)，P3 结论见 [P3 Durable Agent Runtime 阶段报告](phase-3-durable-agent-runtime.md)。P4 交互与恢复切片见 [P4 会话体验与运行控制切片](phase-4-chat-experience.md)、[P4 主题、推理摘要与运行恢复切片](phase-4-appearance-and-reasoning.md)，最终收口见 [P4 韧性、审批与 macOS 加固报告](phase-4-resilience-and-macos.md)，Markdown 阅读体验与 Xcode 调试入口见 [P4 Markdown 会话体验与 Xcode 调试补充](phase-4-markdown-and-xcode.md)，并发会话与失败上下文修复见 [P4 多会话与 Provider 失败恢复补充](phase-4-multiconversation-and-provider-recovery.md)。当前已落地完整 inbox 分支消费、附件持久化、高风险审批、业务幂等键、人工 reconcile、生命周期故障恢复、多主题并行会话、失败上下文隔离、Markdown 安全预览、Xcode 本地调试和 macOS bundle 加固；Developer ID 签名与 Apple 公证由发布环境门禁完成。
 
+桌面平台入口采用 [Tauri 多平台壳工程布局](platform-shell-layout.md)：共享可执行壳保留在 `src-tauri`，Xcode、后续 Visual Studio 辅助入口及平台打包资产统一放入 `platforms/<os>`；Tauri 自动发现的 `tauri.<os>.conf.json` 作为薄入口继续位于 `src-tauri`。
+
 ## 16. P0 验收
 
 - Tauri 2 + Vue 3 + TypeScript 工程可启动；

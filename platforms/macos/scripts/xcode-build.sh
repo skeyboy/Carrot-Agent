@@ -2,10 +2,17 @@
 
 set -euo pipefail
 
-PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 CARGO_MANIFEST="$PROJECT_ROOT/src-tauri/Cargo.toml"
 
 cd "$PROJECT_ROOT"
+
+for dependency in npm cargo; do
+  if ! command -v "$dependency" >/dev/null 2>&1; then
+    echo "error: $dependency is required to build Carrot from Xcode" >&2
+    exit 1
+  fi
+done
 
 if [[ "${ACTION:-build}" == "clean" ]]; then
   cargo clean --manifest-path "$CARGO_MANIFEST"

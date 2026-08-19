@@ -24,11 +24,12 @@ npm run check
 
 `npm run bindings` regenerates [src/bindings.ts](src/bindings.ts) from Rust commands and DTOs. The generated file is committed so frontend checks do not depend on starting the desktop runtime.
 
-For native macOS debugging, open `Carrot.xcodeproj` and use the shared Carrot scheme. `Command+B` builds the Vue assets and Rust binary; `Command+R` launches `src-tauri/target/debug/carrot` under LLDB without requiring a separate Vite process.
+For native macOS debugging, open `platforms/macos/Carrot.xcodeproj` and use the shared Carrot scheme. `Command+B` builds the Vue assets and Rust binary; `Command+R` launches `src-tauri/target/debug/carrot` under LLDB without requiring a separate Vite process. Native IDE and packaging entry points live under `platforms/<os>` while the shared Tauri executable remains in `src-tauri`.
 
 ## Documentation
 
 - [System design and implementation plan](docs/llm-client-design-plan.md)
+- [Tauri multi-platform shell layout](docs/platform-shell-layout.md)
 - [Agent modes and resilient session runtime](docs/agent-runtime-modes-and-resilience.md)
 - [Phase 0 baseline report](docs/phase-0-baseline.md)
 - [Phase 1 local persistence report](docs/phase-1-local-persistence.md)

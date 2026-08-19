@@ -7,17 +7,23 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		CA0000000000000000000001 /* src */ = {isa = PBXFileReference; lastKnownFileType = folder; name = src; path = src; sourceTree = "<group>"; };
-		CA0000000000000000000002 /* src-tauri */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "src-tauri"; path = "src-tauri"; sourceTree = "<group>"; };
-		CA0000000000000000000003 /* package.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = package.json; sourceTree = "<group>"; };
-		CA0000000000000000000004 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
-		CA0000000000000000000005 /* docs */ = {isa = PBXFileReference; lastKnownFileType = folder; name = docs; path = docs; sourceTree = "<group>"; };
+		CA0000000000000000000001 /* src */ = {isa = PBXFileReference; lastKnownFileType = folder; name = src; path = ../../src; sourceTree = "<group>"; };
+		CA0000000000000000000002 /* src-tauri */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "src-tauri"; path = "../../src-tauri"; sourceTree = "<group>"; };
+		CA0000000000000000000003 /* package.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = package.json; path = ../../package.json; sourceTree = "<group>"; };
+		CA0000000000000000000004 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = README.md; path = ../../README.md; sourceTree = "<group>"; };
+		CA0000000000000000000005 /* docs */ = {isa = PBXFileReference; lastKnownFileType = folder; name = docs; path = ../../docs; sourceTree = "<group>"; };
+		CA0000000000000000000006 /* Carrot.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Carrot.xcconfig; sourceTree = "<group>"; };
+		CA0000000000000000000007 /* Entitlements.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Entitlements.plist; sourceTree = "<group>"; };
+		CA0000000000000000000008 /* xcode-build.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = scripts/xcode-build.sh; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
 		CA0000000000000000000010 = {
 			isa = PBXGroup;
 			children = (
+				CA0000000000000000000006 /* Carrot.xcconfig */,
+				CA0000000000000000000007 /* Entitlements.plist */,
+				CA0000000000000000000008 /* xcode-build.sh */,
 				CA0000000000000000000001 /* src */,
 				CA0000000000000000000002 /* src-tauri */,
 				CA0000000000000000000005 /* docs */,
@@ -36,7 +42,7 @@
 			buildPhases = (
 			);
 			buildToolPath = /bin/bash;
-			buildWorkingDirectory = "$(SRCROOT)";
+			buildWorkingDirectory = "$(SRCROOT)/../..";
 			dependencies = (
 			);
 			name = Carrot;
@@ -72,19 +78,15 @@
 /* Begin XCBuildConfiguration section */
 		CA0000000000000000000040 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = CA0000000000000000000006 /* Carrot.xcconfig */;
 			buildSettings = {
-				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				PRODUCT_NAME = Carrot;
-				SDKROOT = macosx;
 			};
 			name = Debug;
 		};
 		CA0000000000000000000041 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = CA0000000000000000000006 /* Carrot.xcconfig */;
 			buildSettings = {
-				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				PRODUCT_NAME = Carrot;
-				SDKROOT = macosx;
 			};
 			name = Release;
 		};

@@ -44,7 +44,7 @@ Tauri `ExitRequested` 和 `Resumed` 会先为内存中的活跃 Run 事务提交
 
 - 使用 `tauri.macos.conf.json` 隔离首发平台配置，主配置继续保留跨平台 bundle 能力；
 - 最低系统版本设为 macOS 12，启用 hardened runtime；
-- 显式配置最小空 Entitlements，后续新增系统能力必须经过权限审查；
+- 在 `platforms/macos/Entitlements.plist` 显式配置最小空 Entitlements，并由 `src-tauri/tauri.macos.conf.json` 引用；后续新增系统能力必须经过权限审查；
 - WebView 启用 CSP，仅允许本地资源、Tauri IPC 与 data/blob 图片；
 - 增加 `nosniff` 响应头、DeveloperTool bundle category 和产品说明；
 - 产物目标为 `.app` 与 `.dmg`。

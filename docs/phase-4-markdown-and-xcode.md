@@ -7,7 +7,7 @@
 
 本轮完成会话阅读与 macOS 开发体验收口。AI 推理在流式阶段持续展开，完成后自动折叠，耗时按钮同时承担状态摘要和展开入口；用户消息与 AI 最终回答均提供独立复制操作。消息正文和推理正文统一通过 Markdown 组件渲染，会话头部压缩为 52px 单行栏，为消息区释放纵向空间。
 
-仓库新增共享 `Carrot.xcodeproj`。Xcode 的 Carrot Scheme 通过 Legacy Build Target 运行统一构建脚本，先生成 Vue 前端资源，再编译 Rust/Tauri 二进制；Debug 的 Run 动作由 LLDB 直接启动 `src-tauri/target/debug/carrot`，无需另开 Vite 服务。
+仓库新增共享 Xcode 工程，当前位于 `platforms/macos/Carrot.xcodeproj`。Xcode 的 Carrot Scheme 通过 Legacy Build Target 运行统一构建脚本，先生成 Vue 前端资源，再编译 Rust/Tauri 二进制；Debug 的 Run 动作由 LLDB 直接启动 `src-tauri/target/debug/carrot`，无需另开 Vite 服务。
 
 ## 2. 前端组件边界
 
@@ -22,7 +22,7 @@ Markdown 使用 `markdown-it`，启用换行和常用块级语法。原始 HTML 
 
 ## 3. Xcode 工作流
 
-首次使用前仍需安装 Node.js、Rust 和 npm 依赖。打开 `Carrot.xcodeproj` 并选择共享的 Carrot Scheme：
+首次使用前仍需安装 Node.js、Rust 和 npm 依赖。打开 `platforms/macos/Carrot.xcodeproj` 并选择共享的 Carrot Scheme：
 
 - `Command+B`：执行前端类型检查与生产资源构建，再运行 `cargo build`；
 - `Command+R`：构建后由 LLDB 启动 debug 二进制；
@@ -35,8 +35,8 @@ Markdown 使用 `markdown-it`，启用换行和常用块级语法。原始 HTML 
 
 - `npm run lint`：通过；
 - `npm run test:unit`：8 项通过，覆盖推理折叠、双方复制、Markdown 预览和危险 HTML/链接隔离；
-- `xcodebuild -project Carrot.xcodeproj -list`：识别 Carrot Target 和共享 Scheme；
-- `xcodebuild -project Carrot.xcodeproj -scheme Carrot -configuration Debug build CODE_SIGNING_ALLOWED=NO`：通过；
+- `xcodebuild -project platforms/macos/Carrot.xcodeproj -list`：识别 Carrot Target 和共享 Scheme；
+- `xcodebuild -project platforms/macos/Carrot.xcodeproj -scheme Carrot -configuration Debug build CODE_SIGNING_ALLOWED=NO`：通过；
 - 浏览器 1280×720 验收：头部 52px、消息区 593px、输入区 75px，三区无重叠；流式推理展开，结束后折叠，耗时入口可重新展开；
 - `npm audit --omit=dev`：生产依赖无已知漏洞。npm 仍报告既有开发依赖漏洞，未使用强制升级破坏当前工具链。
 
