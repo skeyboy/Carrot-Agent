@@ -1,5 +1,5 @@
 import { flushPromises, mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import App from "./App.vue";
 import { resetWorkspacePreview } from "./api/workspace";
@@ -19,6 +19,7 @@ describe("App", () => {
     expect(wrapper.text()).toContain("Persistence test");
     expect(wrapper.text()).toContain("No messages yet");
     expect(wrapper.get('[aria-label="Message"]')).toBeTruthy();
+    expect(wrapper.find(".model-summary").exists()).toBe(false);
   });
 
   it("opens the sectioned settings center from the bottom sidebar", async () => {
@@ -77,8 +78,51 @@ describe("App", () => {
 
     await wrapper.get('[aria-label="Message"]').setValue("Hello");
     await wrapper.get(".chat-composer form").trigger("submit");
+    await new Promise((resolve) => setTimeout(resolve, 350));
     await flushPromises();
 
     expect(wrapper.text()).toContain("Preview response");
+  });
+
+  it("restores unfinished input after stop and pause, then copies the completed answer", async () => {
+    resetWorkspacePreview();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get('[aria-label="New conversation"]').trigger("click");
+    await wrapper.get("#conversation-title").setValue("Control test");
+    await wrapper.get(".create-form").trigger("submit");
+    await flushPromises();
+
+    const composer = wrapper.get('[aria-label="Message"]');
+    await composer.setValue("Original input");
+    await wrapper.get(".chat-composer form").trigger("submit");
+    await flushPromises();
+    await wrapper.get('[aria-label="Stop response"]').trigger("click");
+    await flushPromises();
+    expect((composer.element as HTMLTextAreaElement).value).toBe("Original input");
+    expect(wrapper.findAll(".message.user")).toHaveLength(0);
+
+    await composer.setValue("Paused edit");
+    await wrapper.get(".chat-composer form").trigger("submit");
+    await flushPromises();
+    await wrapper.get('[aria-label="Pause response"]').trigger("click");
+    await flushPromises();
+    expect((composer.element as HTMLTextAreaElement).value).toBe("Paused edit");
+    expect(wrapper.findAll(".message.user")).toHaveLength(0);
+
+    await composer.setValue("Final edit");
+    await wrapper.get(".chat-composer form").trigger("submit");
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await flushPromises();
+    expect(wrapper.findAll(".message.user")).toHaveLength(1);
+    expect(wrapper.get(".message.user").text()).toContain("Final edit");
+
+    await wrapper.get('[aria-label="Copy response"]').trigger("click");
+    expect(writeText).toHaveBeenCalledWith("Preview response");
   });
 });

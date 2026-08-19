@@ -21,7 +21,8 @@ export type ProviderEvent =
       output_tokens: number | null;
     }
   | { type: "failed"; message: string }
-  | { type: "cancelled" };
+  | { type: "cancelled" }
+  | { type: "paused" };
 
 export interface ChatEvent {
   runId: string;
@@ -32,6 +33,19 @@ export interface ChatEvent {
 const previewAttachments = new Map<string, AttachmentDto[]>();
 const previewItems = new Map<string, RunItemDto[]>();
 const previewHandlers = new Set<(event: ChatEvent) => void>();
+interface PreviewRun {
+  id: string;
+  conversationId: string;
+  status: "running" | "paused";
+  timer?: ReturnType<typeof setTimeout>;
+}
+const previewRuns = new Map<string, PreviewRun>();
+
+function publishPreview(run: PreviewRun, event: ProviderEvent) {
+  previewHandlers.forEach((handler) =>
+    handler({ runId: run.id, conversationId: run.conversationId, event }),
+  );
+}
 
 function isTauri() {
   return "__TAURI_INTERNALS__" in window;
@@ -63,22 +77,39 @@ export async function startChat(request: ChatStartRequest): Promise<ChatStartRes
   if (!isTauri()) {
     const runId = crypto.randomUUID();
     const now = Date.now().toString();
-    const items = previewItems.get(request.conversationId) ?? [];
-    items.push(
-      {
-        id: crypto.randomUUID(),
-        runId,
-        seq: "1",
-        kind: "message",
+    const existing = previewItems.get(request.conversationId) ?? [];
+    if (request.replacesRunId) {
+      const replaced = previewRuns.get(request.replacesRunId);
+      if (replaced?.timer) clearTimeout(replaced.timer);
+      previewRuns.delete(request.replacesRunId);
+    }
+    const items = request.replacesRunId
+      ? existing.filter((item) => item.runId !== request.replacesRunId)
+      : existing;
+    items.push({
+      id: crypto.randomUUID(),
+      runId,
+      seq: "1",
+      kind: "message",
+      role: "user",
+      contentJson: JSON.stringify({
         role: "user",
-        contentJson: JSON.stringify({
-          role: "user",
-          content: [{ type: "text", text: request.text }],
-        }),
-        callId: null,
-        createdAtMs: now,
-      },
-      {
+        content: [{ type: "text", text: request.text }],
+      }),
+      callId: null,
+      createdAtMs: now,
+    });
+    previewItems.set(request.conversationId, items);
+    const run: PreviewRun = {
+      id: runId,
+      conversationId: request.conversationId,
+      status: "running",
+    };
+    queueMicrotask(() => publishPreview(run, { type: "started", response_id: `preview-${runId}` }));
+    run.timer = setTimeout(() => {
+      if (run.status !== "running") return;
+      publishPreview(run, { type: "text_delta", delta: "Preview response" });
+      items.push({
         id: crypto.randomUUID(),
         runId,
         seq: "2",
@@ -90,23 +121,16 @@ export async function startChat(request: ChatStartRequest): Promise<ChatStartRes
         }),
         callId: null,
         createdAtMs: now,
-      },
-    );
-    previewItems.set(request.conversationId, items);
-    queueMicrotask(() => {
-      const publish = (event: ProviderEvent) =>
-        previewHandlers.forEach((handler) =>
-          handler({ runId, conversationId: request.conversationId, event }),
-        );
-      publish({ type: "started", response_id: `preview-${runId}` });
-      publish({ type: "text_delta", delta: "Preview response" });
-      publish({
+      });
+      previewRuns.delete(runId);
+      publishPreview(run, {
         type: "completed",
         response_id: `preview-${runId}`,
         input_tokens: null,
         output_tokens: null,
       });
-    });
+    }, 300);
+    previewRuns.set(runId, run);
     return { runId };
   }
   return resultData(await commands.chatStart(request));
@@ -114,9 +138,19 @@ export async function startChat(request: ChatStartRequest): Promise<ChatStartRes
 
 export async function getChatSnapshot(conversationId: string): Promise<ChatSnapshotDto> {
   if (!isTauri()) {
+    const activeRun = [...previewRuns.values()]
+      .reverse()
+      .find((run) => run.conversationId === conversationId);
     return {
       conversationId,
-      activeRun: null,
+      activeRun: activeRun
+        ? {
+            id: activeRun.id,
+            status: activeRun.status,
+            phase: activeRun.status === "paused" ? "none" : "model_stream",
+            lastEventSeq: "0",
+          }
+        : null,
       items: [...(previewItems.get(conversationId) ?? [])],
       events: [],
       toolExecutions: [],
@@ -126,8 +160,29 @@ export async function getChatSnapshot(conversationId: string): Promise<ChatSnaps
 }
 
 export async function cancelChat(runId: string): Promise<void> {
-  if (!isTauri()) return;
+  if (!isTauri()) {
+    const run = previewRuns.get(runId);
+    if (run) {
+      if (run.timer) clearTimeout(run.timer);
+      previewRuns.delete(runId);
+      publishPreview(run, { type: "cancelled" });
+    }
+    return;
+  }
   resultData(await commands.chatCancel(runId));
+}
+
+export async function pauseChat(runId: string): Promise<void> {
+  if (!isTauri()) {
+    const run = previewRuns.get(runId);
+    if (run) {
+      if (run.timer) clearTimeout(run.timer);
+      run.status = "paused";
+      publishPreview(run, { type: "paused" });
+    }
+    return;
+  }
+  resultData(await commands.chatPause(runId));
 }
 
 export async function subscribeToChatEvents(handler: (event: ChatEvent) => void) {

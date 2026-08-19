@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, MessageSquare, Pencil, Plus, Server, Trash2, X } from "lucide-vue-next";
+import { Check, MessageSquare, Pencil, Plus, Trash2, X } from "lucide-vue-next";
 import { computed, onMounted, ref } from "vue";
 
 import {
@@ -59,11 +59,6 @@ const busyProviderId = ref<string | null>(null);
 
 const selectedConversation = computed(
   () => conversations.value.find((conversation) => conversation.id === selectedId.value) ?? null,
-);
-const selectedProvider = computed(() =>
-  providers.value.profiles.find(
-    (provider) => provider.id === selectedConversation.value?.defaultProviderProfileId,
-  ),
 );
 
 async function loadWorkspace() {
@@ -436,15 +431,6 @@ onMounted(loadWorkspace);
           <div>
             <p>Conversation</p>
             <h1>{{ selectedConversation.title }}</h1>
-          </div>
-          <div class="model-summary">
-            <Server :size="16" aria-hidden="true" />
-            <span>
-              <strong>{{
-                selectedProvider?.label ?? selectedConversation.defaultProviderProfileId
-              }}</strong>
-              <small>{{ selectedConversation.defaultModel }}</small>
-            </span>
           </div>
         </header>
         <ConversationThread

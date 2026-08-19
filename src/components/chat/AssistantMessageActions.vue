@@ -1,0 +1,64 @@
+<script setup lang="ts">
+import { Check, Copy } from "lucide-vue-next";
+import { onBeforeUnmount, ref } from "vue";
+
+const props = defineProps<{ text: string }>();
+const emit = defineEmits<{ error: [message: string] }>();
+const copied = ref(false);
+let resetTimer: ReturnType<typeof setTimeout> | undefined;
+
+onBeforeUnmount(() => clearTimeout(resetTimer));
+
+async function copyResponse() {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(props.text);
+    } else {
+      copyWithSelection(props.text);
+    }
+    showCopied();
+  } catch {
+    try {
+      copyWithSelection(props.text);
+      showCopied();
+    } catch {
+      emit("error", "The response could not be copied");
+    }
+  }
+}
+
+function showCopied() {
+  copied.value = true;
+  clearTimeout(resetTimer);
+  resetTimer = setTimeout(() => {
+    copied.value = false;
+  }, 1600);
+}
+
+function copyWithSelection(text: string) {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("Clipboard copy was rejected");
+}
+</script>
+
+<template>
+  <div class="assistant-message-actions">
+    <button
+      type="button"
+      :title="copied ? 'Copied' : 'Copy response'"
+      :aria-label="copied ? 'Response copied' : 'Copy response'"
+      @click="copyResponse"
+    >
+      <Check v-if="copied" :size="13" />
+      <Copy v-else :size="13" />
+      <span>{{ copied ? "Copied" : "Copy" }}</span>
+    </button>
+  </div>
+</template>

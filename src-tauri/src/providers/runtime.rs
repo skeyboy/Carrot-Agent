@@ -99,6 +99,7 @@ pub enum ProviderEvent {
         message: String,
     },
     Cancelled,
+    Paused,
 }
 
 #[derive(Debug, thiserror::Error)]

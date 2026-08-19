@@ -1,17 +1,22 @@
 <script setup lang="ts">
-import { Paperclip, Send, Square, X } from "lucide-vue-next";
-import { ref } from "vue";
+import { Paperclip, Pause, Send, Square, X } from "lucide-vue-next";
 
 import type { AttachmentDto } from "../../bindings";
 
-defineProps<{ attachments: AttachmentDto[]; running: boolean; attaching: boolean }>();
+defineProps<{
+  attachments: AttachmentDto[];
+  running: boolean;
+  attaching: boolean;
+  busy: boolean;
+}>();
+const text = defineModel<string>({ default: "" });
 const emit = defineEmits<{
   send: [text: string];
   attach: [];
   removeAttachment: [id: string];
   cancel: [];
+  pause: [];
 }>();
-const text = ref("");
 
 function submit() {
   if (!text.value.trim()) return;
@@ -34,7 +39,7 @@ function submit() {
         </button>
       </span>
     </div>
-    <form @submit.prevent="submit">
+    <form :class="{ running }" @submit.prevent="submit">
       <button
         class="icon-button"
         type="button"
@@ -55,10 +60,22 @@ function submit() {
       ></textarea>
       <button
         v-if="running"
+        class="icon-button pause-button"
+        type="button"
+        title="Pause response"
+        aria-label="Pause response"
+        :disabled="busy"
+        @click="emit('pause')"
+      >
+        <Pause :size="15" fill="currentColor" />
+      </button>
+      <button
+        v-if="running"
         class="icon-button stop-button"
         type="button"
         title="Stop response"
         aria-label="Stop response"
+        :disabled="busy"
         @click="emit('cancel')"
       >
         <Square :size="14" fill="currentColor" />

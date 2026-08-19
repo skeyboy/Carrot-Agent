@@ -21,8 +21,12 @@ html,
 body,
 #app {
   min-width: 320px;
+  height: 100%;
   min-height: 100%;
   margin: 0;
+}
+body {
+  overflow: hidden;
 }
 button,
 input,
@@ -35,15 +39,19 @@ button {
 
 .app-shell {
   display: grid;
-  min-height: 100vh;
+  height: 100dvh;
+  min-height: 0;
   grid-template-columns: 300px minmax(0, 1fr);
+  overflow: hidden;
   background: #f7f8f7;
 }
 
 .sidebar {
   display: grid;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
   border-right: 1px solid #d9dfdb;
   background: #fff;
 }
@@ -286,6 +294,7 @@ button {
 
 .sidebar-footer {
   display: grid;
+  flex: 0 0 auto;
   gap: 2px;
   padding: 8px;
   border-top: 1px solid #e3e7e4;
@@ -326,15 +335,18 @@ button {
   position: relative;
   display: grid;
   min-width: 0;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
   grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
   background: #f7f8f7;
 }
 
 .settings-page {
   display: grid;
   min-width: 0;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
   background: #fff;
 }
@@ -808,32 +820,6 @@ button {
   font-size: 18px;
   line-height: 24px;
 }
-.model-summary {
-  display: flex;
-  max-width: 260px;
-  align-items: center;
-  gap: 9px;
-  color: #68736d;
-}
-.model-summary span {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-}
-.model-summary strong,
-.model-summary small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.model-summary strong {
-  color: #303a35;
-  font-size: 12px;
-}
-.model-summary small {
-  font-size: 10px;
-}
-
 .empty-thread,
 .empty-workspace {
   display: grid;
@@ -850,12 +836,13 @@ button {
   min-height: 0;
   grid-row: 2 / -1;
   grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 
 .agent-run-status {
   position: absolute;
   z-index: 2;
-  top: 67px;
+  top: 12px;
   right: 22px;
   display: flex;
   align-items: center;
@@ -871,6 +858,9 @@ button {
 .agent-run-status svg {
   animation: status-spin 1s linear infinite;
 }
+.agent-run-status.paused svg {
+  animation: none;
+}
 @keyframes status-spin {
   to {
     transform: rotate(360deg);
@@ -882,6 +872,7 @@ button {
   align-content: start;
   gap: 18px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 26px max(28px, calc((100% - 760px) / 2));
 }
 .message {
@@ -901,6 +892,33 @@ button {
   font-size: 13px;
   line-height: 20px;
   white-space: pre-wrap;
+}
+.message-content {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+.assistant-message-actions {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+}
+.assistant-message-actions button {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  color: #707b75;
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+}
+.assistant-message-actions button:hover {
+  color: #344039;
+  background: #edf1ef;
 }
 .message.user p {
   justify-self: end;
@@ -922,6 +940,8 @@ button {
 }
 
 .chat-composer {
+  position: relative;
+  z-index: 3;
   display: grid;
   gap: 8px;
   padding: 12px max(28px, calc((100% - 760px) / 2)) 16px;
@@ -938,6 +958,9 @@ button {
   border: 1px solid #cfd7d2;
   border-radius: 7px;
   box-shadow: 0 1px 3px rgb(30 45 36 / 6%);
+}
+.chat-composer form.running {
+  grid-template-columns: 34px minmax(0, 1fr) 34px 34px;
 }
 .chat-composer textarea {
   width: 100%;
@@ -963,6 +986,10 @@ button {
 .stop-button {
   color: #8f2d2a;
   background: #fff2f1;
+}
+.pause-button {
+  color: #73581e;
+  background: #fff9e9;
 }
 .attachment-strip {
   display: flex;
@@ -1052,9 +1079,6 @@ button {
     align-items: flex-start;
     padding: 16px 18px;
   }
-  .model-summary {
-    max-width: 150px;
-  }
   .settings-layout {
     grid-template-columns: 150px minmax(0, 1fr);
     gap: 22px;
@@ -1067,7 +1091,8 @@ button {
     display: block;
   }
   .sidebar {
-    min-height: 100vh;
+    height: 100dvh;
+    min-height: 0;
     border-right: 0;
   }
   .conversation-pane {

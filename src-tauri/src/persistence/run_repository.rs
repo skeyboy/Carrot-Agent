@@ -65,7 +65,7 @@ impl RunStore for SqliteRunStore {
         let run_row = NewRunRow {
             id: &input.id,
             conversation_id: &input.conversation_id,
-            parent_run_id: None,
+            parent_run_id: input.replaces_run_id.as_deref(),
             status: "running",
             phase: "routing",
             strategy: input.strategy.as_str(),
@@ -112,6 +112,23 @@ impl RunStore for SqliteRunStore {
         let mut connection = self.database.connection().await.map_err(unavailable)?;
         connection
             .transaction::<_, diesel::result::Error, _>(async |connection| {
+                if let Some(replaced_run_id) = input.replaces_run_id.as_deref() {
+                    let replaceable = runs::table
+                        .filter(runs::id.eq(replaced_run_id))
+                        .filter(runs::conversation_id.eq(&input.conversation_id))
+                        .filter(runs::status.eq_any(["paused", "cancelled"]))
+                        .select(runs::id)
+                        .first::<String>(connection)
+                        .await
+                        .optional()?;
+                    if replaceable.is_none() {
+                        return Err(diesel::result::Error::RollbackTransaction);
+                    }
+                    diesel::update(items::table.filter(items::run_id.eq(replaced_run_id)))
+                        .set(items::status.eq("superseded"))
+                        .execute(connection)
+                        .await?;
+                }
                 diesel::insert_into(runs::table)
                     .values(run_row)
                     .execute(connection)
@@ -481,13 +498,11 @@ impl RunStore for SqliteRunStore {
             .map_err(query_error)?;
         let mut events_output = Vec::new();
         let mut tools_output = Vec::new();
-        let mut active_run = None;
+        let mut latest_run = None;
         for row in run_rows {
             let run_id = row.id.clone();
             let run = AgentRun::try_from(row)?;
-            if !run.status.is_terminal() {
-                active_run = Some(run);
-            }
+            latest_run = Some(run);
             events_output.extend(
                 run_events::table
                     .filter(run_events::run_id.eq(&run_id))
@@ -515,7 +530,7 @@ impl RunStore for SqliteRunStore {
         }
         Ok(ChatSnapshot {
             conversation_id: conversation_id.to_owned(),
-            active_run,
+            active_run: latest_run.filter(|run| !run.status.is_terminal()),
             items,
             events: events_output,
             tool_executions: tools_output,

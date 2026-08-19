@@ -1,10 +1,10 @@
 # Carrot LLM 客户端设计与实施规划
 
-> 版本：v8
+> 版本：v9
 >
 > 更新日期：2026-08-19
 >
-> 当前阶段：P3 已完成，下一阶段 P4 会话韧性与恢复
+> 当前阶段：P3 已完成，P4 首个会话交互切片已完成
 
 ## 1. 产品目标与确认边界
 
@@ -267,14 +267,14 @@ Rust 单元测试覆盖 SSE 分片、Schema、call/output 关联、状态机、�
 | P0   | 工程、分层、类型安全 IPC、质量门禁、ADR                                   | 已完成 |
 | P1   | 异步 Diesel/SQLite、可恢复 Schema、模型转换、会话 CRUD、Provider 配置加载 | 已完成 |
 | P2   | 设置中心、Keychain、`openai-oxide` Responses、SSE、取消树、附件/图片      | 已完成 |
-| P3   | 工具 Registry/Executor、统一 Run 引擎、混合模式、事件与审计 UI            | 待开始 |
-| P4   | 审批、安全、持久化输入队列、暂停/恢复、崩溃恢复、macOS 打包加固           | 待开始 |
+| P3   | 工具 Registry/Executor、统一 Run 引擎、混合模式、事件与审计 UI            | 已完成 |
+| P4   | 审批、安全、持久化输入队列、暂停/恢复、崩溃恢复、macOS 打包加固           | 进行中 |
 | P5   | 局域网发现、配对、加密同步与冲突处理                                      | 待开始 |
 | P6   | Windows/Linux 打包、MCP、网络存储和其他扩展                               | 待开始 |
 
 每个阶段完成后更新独立阶段报告，记录交付物、验证命令、遗留风险和下一阶段计划。
 
-P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。P2 阶段结论、验证边界与 P3 计划见 [Phase 2 Provider Runtime 报告](phase-2-provider-runtime.md)。
+P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。P2 阶段结论见 [Phase 2 Provider Runtime 报告](phase-2-provider-runtime.md)，P3 结论见 [P3 Durable Agent Runtime 阶段报告](phase-3-durable-agent-runtime.md)。P4 当前交互切片及后续边界见 [P4 会话体验与运行控制切片](phase-4-chat-experience.md)。
 
 ## 16. P0 验收
 

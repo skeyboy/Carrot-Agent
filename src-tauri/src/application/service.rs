@@ -492,6 +492,7 @@ impl CarrotService {
         conversation_id: String,
         text: String,
         attachment_ids: Vec<String>,
+        replaces_run_id: Option<String>,
         events: tokio::sync::mpsc::Sender<ProviderEvent>,
     ) -> Result<(), AppError> {
         let text = text.trim().to_owned();
@@ -567,6 +568,7 @@ impl CarrotService {
             provider_profile: profile,
             model: conversation.default_model,
             runtime_instance_id: self.runtime_instance_id.clone(),
+            replaces_run_id,
             user_message: ProviderMessage {
                 role: MessageRole::User,
                 content,
@@ -601,6 +603,14 @@ impl CarrotService {
 
     pub async fn cancel_chat(&self, run_id: &str) -> Result<(), AppError> {
         if self.cancellation.cancel_run(run_id).await {
+            Ok(())
+        } else {
+            Err(AppError::not_found("active run", run_id))
+        }
+    }
+
+    pub async fn pause_chat(&self, run_id: &str) -> Result<(), AppError> {
+        if self.cancellation.pause_run(run_id).await {
             Ok(())
         } else {
             Err(AppError::not_found("active run", run_id))

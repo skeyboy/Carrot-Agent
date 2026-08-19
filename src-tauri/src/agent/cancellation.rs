@@ -1,11 +1,55 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 pub struct CancellationTree {
     application: CancellationToken,
-    runs: Mutex<HashMap<String, CancellationToken>>,
+    runs: Mutex<HashMap<String, RunCancellation>>,
+}
+
+const STOP_NONE: u8 = 0;
+const STOP_CANCEL: u8 = 1;
+const STOP_PAUSE: u8 = 2;
+
+#[derive(Clone)]
+pub struct RunCancellation {
+    token: CancellationToken,
+    stop_request: Arc<AtomicU8>,
+}
+
+impl RunCancellation {
+    #[cfg(test)]
+    pub fn detached() -> Self {
+        Self {
+            token: CancellationToken::new(),
+            stop_request: Arc::new(AtomicU8::new(STOP_NONE)),
+        }
+    }
+
+    pub fn token(&self) -> CancellationToken {
+        self.token.clone()
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.token.is_cancelled()
+    }
+
+    pub fn is_pause_requested(&self) -> bool {
+        self.stop_request.load(Ordering::SeqCst) == STOP_PAUSE
+    }
+
+    fn cancel(&self) {
+        self.stop_request.store(STOP_CANCEL, Ordering::SeqCst);
+        self.token.cancel();
+    }
+
+    fn pause(&self) {
+        self.stop_request.store(STOP_PAUSE, Ordering::SeqCst);
+        self.token.cancel();
+    }
 }
 
 impl Default for CancellationTree {
@@ -18,12 +62,15 @@ impl Default for CancellationTree {
 }
 
 impl CancellationTree {
-    pub async fn begin_run(&self, run_id: String) -> CancellationToken {
-        let token = self.application.child_token();
-        if let Some(previous) = self.runs.lock().await.insert(run_id, token.clone()) {
+    pub async fn begin_run(&self, run_id: String) -> RunCancellation {
+        let cancellation = RunCancellation {
+            token: self.application.child_token(),
+            stop_request: Arc::new(AtomicU8::new(STOP_NONE)),
+        };
+        if let Some(previous) = self.runs.lock().await.insert(run_id, cancellation.clone()) {
             previous.cancel();
         }
-        token
+        cancellation
     }
 
     pub async fn finish_run(&self, run_id: &str) {
@@ -31,8 +78,17 @@ impl CancellationTree {
     }
 
     pub async fn cancel_run(&self, run_id: &str) -> bool {
-        if let Some(token) = self.runs.lock().await.remove(run_id) {
-            token.cancel();
+        if let Some(cancellation) = self.runs.lock().await.remove(run_id) {
+            cancellation.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn pause_run(&self, run_id: &str) -> bool {
+        if let Some(cancellation) = self.runs.lock().await.remove(run_id) {
+            cancellation.pause();
             true
         } else {
             false
@@ -62,6 +118,17 @@ mod tests {
         assert!(tree.cancel_run("first").await);
         assert!(first.is_cancelled());
         assert!(!second.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn pause_is_distinct_from_cancel() {
+        let tree = CancellationTree::default();
+        let paused = tree.begin_run("paused".to_owned()).await;
+        let cancelled = tree.begin_run("cancelled".to_owned()).await;
+        assert!(tree.pause_run("paused").await);
+        assert!(tree.cancel_run("cancelled").await);
+        assert!(paused.is_pause_requested());
+        assert!(!cancelled.is_pause_requested());
     }
 
     #[tokio::test]

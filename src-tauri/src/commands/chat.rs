@@ -15,6 +15,7 @@ pub struct ChatStartRequest {
     pub conversation_id: String,
     pub text: String,
     pub attachment_ids: Vec<String>,
+    pub replaces_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -176,6 +177,7 @@ pub async fn chat_start(
                 request.conversation_id.clone(),
                 request.text,
                 request.attachment_ids,
+                request.replaces_run_id,
                 sender,
             )
             .await
@@ -203,6 +205,12 @@ pub async fn chat_cancel(
     run_id: String,
 ) -> Result<(), AppError> {
     service.cancel_chat(&run_id).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn chat_pause(service: State<'_, CarrotService>, run_id: String) -> Result<(), AppError> {
+    service.pause_chat(&run_id).await
 }
 
 #[tauri::command]

@@ -41,6 +41,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
         commands::attachment::attachment_delete,
         commands::chat::chat_start,
         commands::chat::chat_cancel,
+        commands::chat::chat_pause,
         commands::chat::chat_snapshot
     ])
 }

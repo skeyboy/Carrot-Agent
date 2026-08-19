@@ -369,6 +369,8 @@ run_id, seq, persisted_at_ms, kind, payload
 - 加入 app lifecycle、休眠/唤醒、崩溃和强制终止测试；
 - 完成高风险审批、幂等键和文件原子写协议。
 
+当前已完成首个交互切片：运行中的请求可区分 pause 与 cancel，在安全取消点提交 `paused` 或 `cancelled`；两者都会恢复原始输入和附件，用户编辑后创建新 Run，并在同一事务中 supersede 旧 Run 的消息。该行为满足“暂停后编辑重发”，但不等同于恢复旧 Run 的执行位置；同 Run resume、durable pending input、lease takeover 和副作用 reconcile 仍属于后续 P4。
+
 P5 同步不得同步 active lease；只同步已提交 Item、事件和稳定业务记录。冲突解决不能重放工具副作用。
 
 ## 12. 验证矩阵

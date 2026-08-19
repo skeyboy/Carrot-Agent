@@ -134,6 +134,7 @@ pub struct NewRun {
     pub provider_profile: ProviderProfile,
     pub model: String,
     pub runtime_instance_id: String,
+    pub replaces_run_id: Option<String>,
     pub user_content: serde_json::Value,
 }
 

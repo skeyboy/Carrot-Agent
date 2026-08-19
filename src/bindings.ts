@@ -35,6 +35,7 @@ export const commands = {
 	attachmentDelete: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("attachment_delete", { id })),
 	chatStart: (request: ChatStartRequest) => typedError<ChatStartResponse, AppError>(__TAURI_INVOKE("chat_start", { request })),
 	chatCancel: (runId: string) => typedError<null, AppError>(__TAURI_INVOKE("chat_cancel", { runId })),
+	chatPause: (runId: string) => typedError<null, AppError>(__TAURI_INVOKE("chat_pause", { runId })),
 	chatSnapshot: (conversationId: string) => typedError<ChatSnapshotDto, AppError>(__TAURI_INVOKE("chat_snapshot", { conversationId })),
 };
 
@@ -77,6 +78,7 @@ export type ChatStartRequest = {
 	conversationId: string,
 	text: string,
 	attachmentIds: string[],
+	replacesRunId: string | null,
 };
 
 export type ChatStartResponse = {
