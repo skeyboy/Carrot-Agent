@@ -401,8 +401,31 @@ button {
   display: flex;
   min-height: 86px;
   align-items: center;
+  gap: 16px;
   padding: 16px 28px;
   border-bottom: 1px solid var(--border-primary);
+}
+.settings-back {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--border-control);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: var(--surface-primary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+.settings-back:hover {
+  color: var(--text-primary);
+  background: var(--surface-muted);
+}
+.settings-back:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .settings-header p {
   margin: 0 0 3px;

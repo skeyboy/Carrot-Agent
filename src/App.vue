@@ -441,6 +441,7 @@ onMounted(loadWorkspace);
         :reloading-providers="isReloadingProviders"
         :saving-settings="isSavingSettings"
         :busy-provider-id="busyProviderId"
+        @close="openWorkspace"
         @reload-providers="reloadProviders"
         @create-provider="createProvider"
         @update-provider="updateProvider"

@@ -77,6 +77,12 @@ describe("App", () => {
     expect(wrapper.get('[aria-label="New conversation"]').attributes("disabled")).toBeDefined();
     expect(wrapper.find(".conversation-header").exists()).toBe(false);
     expect(wrapper.find(".settings-page").exists()).toBe(true);
+
+    await wrapper.get('[aria-label="Back to workspace"]').trigger("click");
+    expect(wrapper.find(".settings-page").exists()).toBe(false);
+    expect(wrapper.get(".conversation-header").text()).toContain("Settings boundary");
+    expect(wrapper.get(".conversation-list").attributes("aria-disabled")).toBe("false");
+    expect(wrapper.get(".conversation-select").attributes("disabled")).toBeUndefined();
   });
 
   it("edits provider defaults and model selection in settings", async () => {

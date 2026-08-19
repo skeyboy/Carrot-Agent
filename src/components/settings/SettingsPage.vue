@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { Database, Info, Palette, Server, SlidersHorizontal, Smartphone } from "lucide-vue-next";
+import {
+  ArrowLeft,
+  Database,
+  Info,
+  Palette,
+  Server,
+  SlidersHorizontal,
+  Smartphone,
+} from "lucide-vue-next";
 import { ref, watch } from "vue";
 
 import type {
@@ -31,6 +39,7 @@ const props = defineProps<{
   busyProviderId: string | null;
 }>();
 const emit = defineEmits<{
+  close: [];
   reloadProviders: [];
   createProvider: [request: CreateProviderProfileRequest];
   updateProvider: [request: UpdateProviderProfileRequest];
@@ -69,6 +78,16 @@ function saveDraft() {
 <template>
   <section class="settings-page" aria-label="Settings">
     <header class="settings-header">
+      <button
+        class="settings-back"
+        type="button"
+        title="Back to workspace"
+        aria-label="Back to workspace"
+        @click="emit('close')"
+      >
+        <ArrowLeft :size="16" aria-hidden="true" />
+        Back
+      </button>
       <div>
         <p>Carrot</p>
         <h1>Settings</h1>

@@ -8,7 +8,7 @@
 
 ## 本次结论
 
-Provider 管理已从工作区侧栏收口到 Settings。侧栏底部只保留 Settings 入口，Providers 作为设置中心内的独立分区。Vue 按职责拆分为 `ProviderSettings`、`ProviderProfileEditor` 和 `ProviderCreateForm`，`App.vue` 只负责加载和协调 IPC 状态。
+Provider 管理已从工作区侧栏收口到 Settings。侧栏底部只保留 Settings 入口，Providers 作为设置中心内的独立分区。Settings 标题栏提供明确的 Back 入口，返回时保留原会话选择和运行状态；设置期间会话列表保持不可交互。Vue 按职责拆分为 `ProviderSettings`、`ProviderProfileEditor` 和 `ProviderCreateForm`，`App.vue` 只负责加载和协调 IPC 状态。
 
 本地 `providers.toml` 升级为版本 2 的 Provider Catalog，并保存以下状态：
 
