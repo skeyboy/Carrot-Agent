@@ -371,6 +371,8 @@ run_id, seq, persisted_at_ms, kind, payload
 
 当前已完成首个交互切片：运行中的请求可区分 pause 与 cancel，在安全取消点提交 `paused` 或 `cancelled`；两者都会恢复原始输入和附件，用户编辑后创建新 Run，并在同一事务中 supersede 旧 Run 的消息。该行为满足“暂停后编辑重发”，但不等同于恢复旧 Run 的执行位置；同 Run resume、durable pending input、lease takeover 和副作用 reconcile 仍属于后续 P4。
 
+第二个交互切片加入 Provider 明确返回的 reasoning summary。摘要 delta 只作为实时事件，聚合后的摘要与耗时以 `reasoning_summary` Item 等待事务提交，Snapshot 可在重载后恢复；不得把普通文本、工具参数或模型隐藏思维链猜测为推理过程。Responses Profile 仅在原生 OpenAI 类型下请求 `summary: auto`，compatible Provider 未声明结构化支持时不发送该参数。
+
 P5 同步不得同步 active lease；只同步已提交 Item、事件和稳定业务记录。冲突解决不能重放工具副作用。
 
 ## 12. 验证矩阵

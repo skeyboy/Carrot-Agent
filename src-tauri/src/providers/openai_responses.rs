@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use openai_oxide::types::responses::{
     EasyInputContent, ImageDetail as OpenAiImageDetail, InputContent, InputImageContent,
-    InputTextContent, OutputItem, ResponseCreateRequest, ResponseInput, ResponseInputItem,
-    ResponseStreamEvent, ResponseTool, Role,
+    InputTextContent, OutputItem, Reasoning, ReasoningSummary, ResponseCreateRequest,
+    ResponseInput, ResponseInputItem, ResponseStreamEvent, ResponseTool, Role,
 };
 use openai_oxide::{ClientConfig, OpenAI};
 use tokio::sync::mpsc;
@@ -97,6 +97,12 @@ impl OpenAiResponsesProvider {
         output.previous_response_id = request.previous_response_id;
         output.store = Some(request.store);
         output.parallel_tool_calls = Some(true);
+        if request.reasoning_summary {
+            output.reasoning = Some(Reasoning {
+                effort: None,
+                summary: Some(ReasoningSummary::Auto),
+            });
+        }
         if !request.tools.is_empty() {
             output.tools = Some(
                 request
@@ -154,6 +160,9 @@ impl LlmProvider for OpenAiResponsesProvider {
                 }),
                 ResponseStreamEvent::ResponseOutputTextDelta(event) => {
                     Some(ProviderEvent::TextDelta { delta: event.delta })
+                }
+                ResponseStreamEvent::ResponseReasoningSummaryTextDelta(event) => {
+                    Some(ProviderEvent::ReasoningDelta { delta: event.delta })
                 }
                 ResponseStreamEvent::ResponseOutputItemAdded(event) => {
                     if let OutputItem::FunctionCall(call) = event.item {
@@ -249,11 +258,13 @@ mod tests {
             }],
             previous_response_id: None,
             store: true,
+            reasoning_summary: true,
         })
         .unwrap();
         let json = serde_json::to_value(request).unwrap();
 
         assert_eq!(json["store"], true);
+        assert_eq!(json["reasoning"]["summary"], "auto");
         assert_eq!(json["input"][0]["content"][1]["type"], "input_image");
         assert_eq!(json["tools"][0]["name"], "lookup");
     }

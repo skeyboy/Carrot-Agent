@@ -86,7 +86,7 @@ impl SettingsStore {
 #[cfg(test)]
 mod tests {
     use super::SettingsStore;
-    use crate::domain::settings::{AppSettings, RunStrategy};
+    use crate::domain::settings::{AppSettings, RunStrategy, ThemePreference};
 
     #[tokio::test]
     async fn persists_valid_settings() {
@@ -98,6 +98,7 @@ mod tests {
             max_model_steps: 12,
             attachment_max_megabytes: 8,
             default_strategy: RunStrategy::Quality,
+            theme: ThemePreference::Dark,
         };
         store.update(changed.clone()).await.unwrap();
 
@@ -105,5 +106,20 @@ mod tests {
             SettingsStore::load(path).await.unwrap().get().await,
             changed
         );
+    }
+
+    #[tokio::test]
+    async fn upgrades_settings_without_a_theme_to_system() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.toml");
+        tokio::fs::write(
+            &path,
+            "requestTimeoutSeconds = 120\nmaxModelSteps = 8\nattachmentMaxMegabytes = 20\ndefaultStrategy = \"auto\"\n",
+        )
+        .await
+        .unwrap();
+
+        let settings = SettingsStore::load(path).await.unwrap().get().await;
+        assert_eq!(settings.theme, ThemePreference::System);
     }
 }

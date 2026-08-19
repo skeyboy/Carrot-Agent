@@ -8,6 +8,8 @@ pub struct AppSettings {
     pub max_model_steps: u16,
     pub attachment_max_megabytes: u16,
     pub default_strategy: RunStrategy,
+    #[serde(default)]
+    pub theme: ThemePreference,
 }
 
 impl Default for AppSettings {
@@ -17,8 +19,18 @@ impl Default for AppSettings {
             max_model_steps: 8,
             attachment_max_megabytes: 20,
             default_strategy: RunStrategy::Auto,
+            theme: ThemePreference::System,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemePreference {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]

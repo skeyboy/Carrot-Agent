@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Database, Info, Server, SlidersHorizontal, Smartphone } from "lucide-vue-next";
+import { Database, Info, Palette, Server, SlidersHorizontal, Smartphone } from "lucide-vue-next";
 import { ref, watch } from "vue";
 
 import type {
@@ -12,12 +12,13 @@ import type {
   UpdateProviderProfileRequest,
 } from "../../bindings";
 import AboutSettings from "./AboutSettings.vue";
+import AppearanceSettings from "./AppearanceSettings.vue";
 import ProviderSettings from "./ProviderSettings.vue";
 import RuntimeSettings from "./RuntimeSettings.vue";
 import StorageSettings from "./StorageSettings.vue";
 import SyncSettings from "./SyncSettings.vue";
 
-export type SettingsSection = "providers" | "runtime" | "storage" | "sync" | "about";
+export type SettingsSection = "providers" | "appearance" | "runtime" | "storage" | "sync" | "about";
 
 const props = defineProps<{
   initialSection: SettingsSection;
@@ -83,6 +84,13 @@ function saveDraft() {
           <Server :size="16" /> Providers
         </button>
         <button
+          :class="{ selected: section === 'appearance' }"
+          type="button"
+          @click="section = 'appearance'"
+        >
+          <Palette :size="16" /> Appearance
+        </button>
+        <button
           :class="{ selected: section === 'runtime' }"
           type="button"
           @click="section = 'runtime'"
@@ -121,6 +129,12 @@ function saveDraft() {
         />
         <RuntimeSettings
           v-else-if="section === 'runtime' && draft"
+          v-model="draft"
+          :saving="savingSettings"
+          @save="saveDraft"
+        />
+        <AppearanceSettings
+          v-else-if="section === 'appearance' && draft"
           v-model="draft"
           :saving="savingSettings"
           @save="saveDraft"

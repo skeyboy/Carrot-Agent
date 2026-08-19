@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bot, MessageSquare, UserRound, Wrench } from "lucide-vue-next";
+import { MessageSquare } from "lucide-vue-next";
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 
 import {
@@ -15,8 +15,8 @@ import {
 import type { ChatEvent } from "../../api/chat";
 import type { ActiveRunDto, AttachmentDto, ChatSnapshotDto, ConversationDto } from "../../bindings";
 import AgentRunStatus from "./AgentRunStatus.vue";
-import AssistantMessageActions from "./AssistantMessageActions.vue";
 import ChatComposer from "./ChatComposer.vue";
+import ConversationMessage from "./ConversationMessage.vue";
 
 interface DisplayMessage {
   id: string;
@@ -24,6 +24,9 @@ interface DisplayMessage {
   role: "user" | "assistant" | "tool";
   text: string;
   settled: boolean;
+  reasoning: string;
+  reasoningDurationMs: number;
+  reasoningRunning: boolean;
 }
 
 const props = defineProps<{ conversation: ConversationDto }>();
@@ -98,6 +101,9 @@ async function send(text: string) {
     role: "user",
     text,
     settled: true,
+    reasoning: "",
+    reasoningDurationMs: 0,
+    reasoningRunning: false,
   };
   const assistantMessage: DisplayMessage = {
     id: crypto.randomUUID(),
@@ -105,6 +111,9 @@ async function send(text: string) {
     role: "assistant",
     text: "",
     settled: false,
+    reasoning: "",
+    reasoningDurationMs: 0,
+    reasoningRunning: false,
   };
   messages.value.push(userMessage, assistantMessage);
   scrollToLatest();
@@ -162,9 +171,22 @@ function applyEvent(payload: ChatEvent) {
   if (event.type === "started") {
     if (activeRun.value) activeRun.value.phase = "model_stream";
   } else if (event.type === "text_delta") {
-    const assistant = [...messages.value].reverse().find((message) => message.role === "assistant");
+    const assistant = assistantForRun(payload.runId);
     if (assistant) assistant.text += event.delta;
     scrollToLatest();
+  } else if (event.type === "reasoning_delta") {
+    const assistant = assistantForRun(payload.runId);
+    if (assistant) {
+      assistant.reasoning += event.delta;
+      assistant.reasoningRunning = true;
+    }
+    scrollToLatest();
+  } else if (event.type === "reasoning_completed") {
+    const assistant = assistantForRun(payload.runId);
+    if (assistant) {
+      assistant.reasoningDurationMs += event.duration_ms;
+      assistant.reasoningRunning = false;
+    }
   } else if (event.type === "tool_call") {
     if (activeRun.value) activeRun.value.phase = "tool_execute";
     toolCount.value += 1;
@@ -174,6 +196,9 @@ function applyEvent(payload: ChatEvent) {
       role: "tool",
       text: `${event.name} · ${JSON.stringify(event.arguments)}`,
       settled: true,
+      reasoning: "",
+      reasoningDurationMs: 0,
+      reasoningRunning: false,
     });
     scrollToLatest();
   } else if (event.type === "failed") {
@@ -183,6 +208,8 @@ function applyEvent(payload: ChatEvent) {
     emit("error", event.message);
     void refreshSnapshot();
   } else if (event.type === "completed") {
+    const assistant = assistantForRun(payload.runId);
+    if (assistant) assistant.settled = true;
     activeRunId.value = null;
     activeRun.value = null;
     activeInput.value = null;
@@ -214,13 +241,46 @@ async function refreshSnapshot() {
 
 function applySnapshot(snapshot: ChatSnapshotDto) {
   const pausedRunId = snapshot.activeRun?.status === "paused" ? snapshot.activeRun.id : null;
+  const reasoningByRun = new Map<string, { text: string; durationMs: number }>();
+  const lastAssistantByRun = new Map<string, string>();
+  snapshot.items.forEach((item) => {
+    if (item.kind === "reasoning_summary") {
+      const content = parseJson(item.contentJson) as {
+        summary?: unknown;
+        durationMs?: unknown;
+      } | null;
+      if (typeof content?.summary === "string") {
+        const existing = reasoningByRun.get(item.runId) ?? { text: "", durationMs: 0 };
+        existing.text += `${existing.text ? "\n\n" : ""}${content.summary}`;
+        if (typeof content.durationMs === "number") existing.durationMs += content.durationMs;
+        reasoningByRun.set(item.runId, existing);
+      }
+    } else if (item.kind === "message" && item.role === "assistant") {
+      lastAssistantByRun.set(item.runId, item.id);
+    }
+  });
   messages.value = snapshot.items.flatMap((item): DisplayMessage[] => {
     if (item.runId === pausedRunId) return [];
     if (item.kind === "message") {
       const content = parseJson(item.contentJson);
       const text = messageText(content);
       if ((item.role === "user" || item.role === "assistant") && text) {
-        return [{ id: item.id, runId: item.runId, role: item.role, text, settled: true }];
+        const reasoning =
+          item.role === "assistant" && lastAssistantByRun.get(item.runId) === item.id
+            ? reasoningByRun.get(item.runId)
+            : undefined;
+        return [
+          {
+            id: item.id,
+            runId: item.runId,
+            role: item.role,
+            text,
+            settled: true,
+            reasoning: reasoning?.text ?? "",
+            reasoningDurationMs: reasoning?.durationMs ?? 0,
+            reasoningRunning: false,
+          },
+        ];
       }
     }
     if (item.kind === "function_call") {
@@ -232,6 +292,9 @@ function applySnapshot(snapshot: ChatSnapshotDto) {
           role: "tool",
           text: `${content.name ?? "tool"} · ${JSON.stringify(content.arguments ?? {})}`,
           settled: true,
+          reasoning: "",
+          reasoningDurationMs: 0,
+          reasoningRunning: false,
         },
       ];
     }
@@ -306,6 +369,12 @@ function restoreActiveInput() {
   activeInput.value = null;
 }
 
+function assistantForRun(runId: string) {
+  return [...messages.value]
+    .reverse()
+    .find((message) => message.runId === runId && message.role === "assistant");
+}
+
 function scrollToLatest() {
   void nextTick(() => {
     if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight;
@@ -325,19 +394,17 @@ function errorMessage(cause: unknown) {
       <h2>No messages yet</h2>
     </div>
     <div v-else ref="messageList" class="message-list">
-      <article v-for="message in messages" :key="message.id" class="message" :class="message.role">
-        <UserRound v-if="message.role === 'user'" :size="16" />
-        <Bot v-else-if="message.role === 'assistant'" :size="16" />
-        <Wrench v-else :size="16" />
-        <div class="message-content">
-          <p>{{ message.text || "…" }}</p>
-          <AssistantMessageActions
-            v-if="message.role === 'assistant' && message.settled && message.text"
-            :text="message.text"
-            @error="emit('error', $event)"
-          />
-        </div>
-      </article>
+      <ConversationMessage
+        v-for="message in messages"
+        :key="message.id"
+        :role="message.role"
+        :text="message.text"
+        :settled="message.settled"
+        :reasoning="message.reasoning"
+        :reasoning-duration-ms="message.reasoningDurationMs"
+        :reasoning-running="message.reasoningRunning"
+        @error="emit('error', $event)"
+      />
     </div>
     <ChatComposer
       v-model="draft"

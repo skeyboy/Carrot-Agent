@@ -1,22 +1,32 @@
 import { commands } from "../bindings";
 import type { AppError, AppSettings, CredentialStatusDto, SettingsSnapshotDto } from "../bindings";
 
-let previewSettings: SettingsSnapshotDto = {
+const defaultPreviewSettings: SettingsSnapshotDto = {
   settings: {
     requestTimeoutSeconds: 120,
     maxModelSteps: 8,
     attachmentMaxMegabytes: 20,
     defaultStrategy: "auto",
+    theme: "system",
   },
   settingsPath: "~/Library/Application Support/com.carrot.llm-client/settings.toml",
   databasePath: "~/Library/Application Support/com.carrot.llm-client/carrot.sqlite3",
   attachmentPath: "~/Library/Application Support/com.carrot.llm-client/attachments",
 };
+let previewSettings = structuredClone(defaultPreviewSettings);
 
 let previewCredentials: CredentialStatusDto[] = [
   { providerId: "openai", configured: false },
   { providerId: "local-compatible", configured: false },
 ];
+
+export function resetSettingsPreview() {
+  previewSettings = structuredClone(defaultPreviewSettings);
+  previewCredentials = [
+    { providerId: "openai", configured: false },
+    { providerId: "local-compatible", configured: false },
+  ];
+}
 
 function isTauri() {
   return "__TAURI_INTERNALS__" in window;

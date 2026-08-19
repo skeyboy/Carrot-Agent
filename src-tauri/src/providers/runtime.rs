@@ -12,6 +12,7 @@ pub struct ProviderRequest {
     pub tools: Vec<ToolDefinition>,
     pub previous_response_id: Option<String>,
     pub store: bool,
+    pub reasoning_summary: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
@@ -84,6 +85,12 @@ pub enum ProviderEvent {
     },
     TextDelta {
         delta: String,
+    },
+    ReasoningDelta {
+        delta: String,
+    },
+    ReasoningCompleted {
+        duration_ms: i64,
     },
     ToolCall {
         call_id: String,

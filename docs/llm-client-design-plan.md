@@ -1,10 +1,10 @@
 # Carrot LLM 客户端设计与实施规划
 
-> 版本：v9
+> 版本：v10
 >
 > 更新日期：2026-08-19
 >
-> 当前阶段：P3 已完成，P4 首个会话交互切片已完成
+> 当前阶段：P3 已完成，P4 会话交互与推理摘要切片已完成
 
 ## 1. 产品目标与确认边界
 
@@ -274,7 +274,7 @@ Rust 单元测试覆盖 SSE 分片、Schema、call/output 关联、状态机、�
 
 每个阶段完成后更新独立阶段报告，记录交付物、验证命令、遗留风险和下一阶段计划。
 
-P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。P2 阶段结论见 [Phase 2 Provider Runtime 报告](phase-2-provider-runtime.md)，P3 结论见 [P3 Durable Agent Runtime 阶段报告](phase-3-durable-agent-runtime.md)。P4 当前交互切片及后续边界见 [P4 会话体验与运行控制切片](phase-4-chat-experience.md)。
+P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。P2 阶段结论见 [Phase 2 Provider Runtime 报告](phase-2-provider-runtime.md)，P3 结论见 [P3 Durable Agent Runtime 阶段报告](phase-3-durable-agent-runtime.md)。P4 已完成的交互切片见 [P4 会话体验与运行控制切片](phase-4-chat-experience.md) 和 [P4 主题与推理摘要切片](phase-4-appearance-and-reasoning.md)。
 
 ## 16. P0 验收
 

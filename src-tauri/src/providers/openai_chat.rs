@@ -339,6 +339,7 @@ mod tests {
             }],
             previous_response_id: None,
             store: true,
+            reasoning_summary: false,
         })
         .unwrap();
         let json = serde_json::to_value(request).unwrap();
@@ -391,6 +392,7 @@ mod tests {
             tools: Vec::new(),
             previous_response_id: None,
             store: false,
+            reasoning_summary: false,
         };
         let (sender, mut receiver) = mpsc::channel(64);
         let task = tokio::spawn(async move {

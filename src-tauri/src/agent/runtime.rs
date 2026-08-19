@@ -174,12 +174,43 @@ impl AgentRuntime {
                     tools: tools.clone(),
                     previous_response_id: None,
                     store: input.provider_profile.store_responses,
+                    reasoning_summary: input.provider_profile.kind
+                        == crate::domain::provider::ProviderKind::OpenaiResponses,
                 },
                 events.clone(),
                 cancellation.token().child_token(),
                 input.request_timeout,
             )
             .await?;
+
+            if !outcome.reasoning.is_empty() {
+                self.store
+                    .commit_item(
+                        &input.run_id,
+                        NewRunItem {
+                            kind: "reasoning_summary".to_owned(),
+                            role: None,
+                            content: serde_json::json!({
+                                "summary": outcome.reasoning,
+                                "durationMs": outcome.reasoning_duration_ms,
+                            }),
+                            call_id: None,
+                            status: "committed".to_owned(),
+                        },
+                        "reasoning_summary_committed",
+                        serde_json::json!({
+                            "step": step,
+                            "durationMs": outcome.reasoning_duration_ms,
+                        }),
+                    )
+                    .await?;
+                events
+                    .send(ProviderEvent::ReasoningCompleted {
+                        duration_ms: outcome.reasoning_duration_ms,
+                    })
+                    .await
+                    .map_err(|_| RuntimeError::Provider("event receiver closed".to_owned()))?;
+            }
 
             if !outcome.text.is_empty() {
                 let message = ProviderMessage {
@@ -377,6 +408,8 @@ impl AgentRuntime {
 
 struct ModelOutcome {
     text: String,
+    reasoning: String,
+    reasoning_duration_ms: i64,
     tool_calls: Vec<ToolCall>,
     completed: Option<ProviderEvent>,
 }
@@ -398,12 +431,15 @@ async fn stream_once(
     let provider_token = cancellation.clone();
     let task = tokio::spawn(async move { provider.stream(request, sender, provider_token).await });
     let mut text = String::new();
+    let mut reasoning = String::new();
     let mut tool_calls = Vec::new();
     let mut completed = None;
+    let started_at = std::time::Instant::now();
     let receive = async {
         while let Some(event) = receiver.recv().await {
             match &event {
                 ProviderEvent::TextDelta { delta } => text.push_str(delta),
+                ProviderEvent::ReasoningDelta { delta } => reasoning.push_str(delta),
                 ProviderEvent::ToolCall {
                     call_id,
                     name,
@@ -432,6 +468,12 @@ async fn stream_once(
             .map_err(|error| RuntimeError::Provider(error.to_string()))?;
         Ok(ModelOutcome {
             text,
+            reasoning_duration_ms: if reasoning.is_empty() {
+                0
+            } else {
+                i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX)
+            },
+            reasoning,
             tool_calls,
             completed,
         })
@@ -530,6 +572,12 @@ mod tests {
             events
                 .send(ProviderEvent::TextDelta {
                     delta: "Edited answer".to_owned(),
+                })
+                .await
+                .unwrap();
+            events
+                .send(ProviderEvent::ReasoningDelta {
+                    delta: "Checked the edited request.".to_owned(),
                 })
                 .await
                 .unwrap();
@@ -747,10 +795,12 @@ mod tests {
         while replacement_receiver.try_recv().is_ok() {}
 
         let items = store.conversation_items(&conversation.id).await.unwrap();
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 3);
         assert!(items.iter().all(|item| item.run_id == "replacement-run"));
         assert_eq!(message_text_from_item(&items[0].content), "Edited input");
-        assert_eq!(message_text_from_item(&items[1].content), "Edited answer");
+        assert_eq!(items[1].kind, "reasoning_summary");
+        assert_eq!(items[1].content["summary"], "Checked the edited request.");
+        assert_eq!(message_text_from_item(&items[2].content), "Edited answer");
     }
 
     fn runtime_input(

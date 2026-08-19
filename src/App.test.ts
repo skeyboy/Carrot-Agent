@@ -1,12 +1,17 @@
 import { flushPromises, mount } from "@vue/test-utils";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App.vue";
+import { resetSettingsPreview } from "./api/settings";
 import { resetWorkspacePreview } from "./api/workspace";
 
 describe("App", () => {
-  it("creates and renders a local conversation", async () => {
+  beforeEach(() => {
     resetWorkspacePreview();
+    resetSettingsPreview();
+  });
+
+  it("creates and renders a local conversation", async () => {
     const wrapper = mount(App);
     await flushPromises();
 
@@ -23,7 +28,6 @@ describe("App", () => {
   });
 
   it("opens the sectioned settings center from the bottom sidebar", async () => {
-    resetWorkspacePreview();
     const wrapper = mount(App);
     await flushPromises();
 
@@ -37,7 +41,6 @@ describe("App", () => {
   });
 
   it("edits provider defaults and model selection in settings", async () => {
-    resetWorkspacePreview();
     const wrapper = mount(App);
     await flushPromises();
     await wrapper.get(".sidebar-footer-row").trigger("click");
@@ -67,8 +70,30 @@ describe("App", () => {
     expect(updatedProvider.text()).toContain("gpt-5.6-luna");
   });
 
+  it("persists and applies the selected appearance", async () => {
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get(".sidebar-footer-row").trigger("click");
+    const appearance = wrapper
+      .findAll(".settings-nav button")
+      .find((button) => button.text().includes("Appearance"));
+    expect(appearance).toBeTruthy();
+    await appearance!.trigger("click");
+    const dark = wrapper
+      .findAll('[aria-label="Application theme"] [role="radio"]')
+      .find((button) => button.text().includes("Dark"));
+    expect(dark).toBeTruthy();
+    await dark!.trigger("click");
+    await wrapper.get(".settings-form").trigger("submit");
+    await flushPromises();
+
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(wrapper.get('[aria-label="Application theme"] [aria-checked="true"]').text()).toContain(
+      "Dark",
+    );
+  });
+
   it("renders streaming events inside the conversation component", async () => {
-    resetWorkspacePreview();
     const wrapper = mount(App);
     await flushPromises();
     await wrapper.get('[aria-label="New conversation"]').trigger("click");
@@ -78,14 +103,25 @@ describe("App", () => {
 
     await wrapper.get('[aria-label="Message"]').setValue("Hello");
     await wrapper.get(".chat-composer form").trigger("submit");
-    await new Promise((resolve) => setTimeout(resolve, 350));
+    await new Promise((resolve) => setTimeout(resolve, 140));
+    await flushPromises();
+    expect(wrapper.get(".reasoning-disclosure").text()).toContain("Reviewing the request");
+    expect(wrapper.get(".reasoning-live").text()).toContain("Reasoning");
+
+    await new Promise((resolve) => setTimeout(resolve, 1_310));
     await flushPromises();
 
     expect(wrapper.text()).toContain("Preview response");
+    expect(wrapper.get(".reasoning-trigger").text()).toContain("Thought for 1.3 s");
+    expect(wrapper.find(".reasoning-content").exists()).toBe(false);
+    await wrapper.get(".reasoning-trigger").trigger("click");
+    expect(wrapper.get(".reasoning-content").text()).toContain("Preparing a concise response");
+
+    const user = wrapper.get(".message.user");
+    expect(user.element.lastElementChild?.tagName.toLowerCase()).toBe("svg");
   });
 
   it("restores unfinished input after stop and pause, then copies the completed answer", async () => {
-    resetWorkspacePreview();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -117,7 +153,7 @@ describe("App", () => {
 
     await composer.setValue("Final edit");
     await wrapper.get(".chat-composer form").trigger("submit");
-    await new Promise((resolve) => setTimeout(resolve, 350));
+    await new Promise((resolve) => setTimeout(resolve, 1_450));
     await flushPromises();
     expect(wrapper.findAll(".message.user")).toHaveLength(1);
     expect(wrapper.get(".message.user").text()).toContain("Final edit");

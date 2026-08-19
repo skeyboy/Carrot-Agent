@@ -23,6 +23,7 @@ import {
   updateSettings,
 } from "./api/settings";
 import { loadHealthStatus } from "./api/system";
+import { useTheme } from "./composables/useTheme";
 import SidebarSettingsNav from "./components/SidebarSettingsNav.vue";
 import SettingsPage from "./components/settings/SettingsPage.vue";
 import type { SettingsSection } from "./components/settings/SettingsPage.vue";
@@ -60,6 +61,8 @@ const busyProviderId = ref<string | null>(null);
 const selectedConversation = computed(
   () => conversations.value.find((conversation) => conversation.id === selectedId.value) ?? null,
 );
+const themePreference = computed(() => settingsSnapshot.value?.settings.theme ?? "system");
+useTheme(themePreference);
 
 async function loadWorkspace() {
   isLoading.value = true;

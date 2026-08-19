@@ -13,6 +13,8 @@ import type {
 export type ProviderEvent =
   | { type: "started"; response_id: string }
   | { type: "text_delta"; delta: string }
+  | { type: "reasoning_delta"; delta: string }
+  | { type: "reasoning_completed"; duration_ms: number }
   | { type: "tool_call"; call_id: string; name: string; arguments: unknown }
   | {
       type: "completed";
@@ -37,7 +39,7 @@ interface PreviewRun {
   id: string;
   conversationId: string;
   status: "running" | "paused";
-  timer?: ReturnType<typeof setTimeout>;
+  timers: Array<ReturnType<typeof setTimeout>>;
 }
 const previewRuns = new Map<string, PreviewRun>();
 
@@ -45,6 +47,11 @@ function publishPreview(run: PreviewRun, event: ProviderEvent) {
   previewHandlers.forEach((handler) =>
     handler({ runId: run.id, conversationId: run.conversationId, event }),
   );
+}
+
+function clearPreviewTimers(run: PreviewRun) {
+  run.timers.forEach((timer) => clearTimeout(timer));
+  run.timers = [];
 }
 
 function isTauri() {
@@ -80,7 +87,7 @@ export async function startChat(request: ChatStartRequest): Promise<ChatStartRes
     const existing = previewItems.get(request.conversationId) ?? [];
     if (request.replacesRunId) {
       const replaced = previewRuns.get(request.replacesRunId);
-      if (replaced?.timer) clearTimeout(replaced.timer);
+      if (replaced) clearPreviewTimers(replaced);
       previewRuns.delete(request.replacesRunId);
     }
     const items = request.replacesRunId
@@ -104,32 +111,60 @@ export async function startChat(request: ChatStartRequest): Promise<ChatStartRes
       id: runId,
       conversationId: request.conversationId,
       status: "running",
+      timers: [],
     };
     queueMicrotask(() => publishPreview(run, { type: "started", response_id: `preview-${runId}` }));
-    run.timer = setTimeout(() => {
-      if (run.status !== "running") return;
-      publishPreview(run, { type: "text_delta", delta: "Preview response" });
-      items.push({
-        id: crypto.randomUUID(),
-        runId,
-        seq: "2",
-        kind: "message",
-        role: "assistant",
-        contentJson: JSON.stringify({
+    run.timers.push(
+      setTimeout(() => {
+        if (run.status === "running") {
+          publishPreview(run, { type: "reasoning_delta", delta: "Reviewing the request. " });
+        }
+      }, 100),
+      setTimeout(() => {
+        if (run.status === "running") {
+          publishPreview(run, {
+            type: "reasoning_delta",
+            delta: "Preparing a concise response.",
+          });
+        }
+      }, 700),
+      setTimeout(() => {
+        if (run.status !== "running") return;
+        const reasoning = "Reviewing the request. Preparing a concise response.";
+        publishPreview(run, { type: "reasoning_completed", duration_ms: 1_250 });
+        publishPreview(run, { type: "text_delta", delta: "Preview response" });
+        items.push({
+          id: crypto.randomUUID(),
+          runId,
+          seq: "2",
+          kind: "reasoning_summary",
+          role: null,
+          contentJson: JSON.stringify({ summary: reasoning, durationMs: 1_250 }),
+          callId: null,
+          createdAtMs: now,
+        });
+        items.push({
+          id: crypto.randomUUID(),
+          runId,
+          seq: "3",
+          kind: "message",
           role: "assistant",
-          content: [{ type: "text", text: "Preview response" }],
-        }),
-        callId: null,
-        createdAtMs: now,
-      });
-      previewRuns.delete(runId);
-      publishPreview(run, {
-        type: "completed",
-        response_id: `preview-${runId}`,
-        input_tokens: null,
-        output_tokens: null,
-      });
-    }, 300);
+          contentJson: JSON.stringify({
+            role: "assistant",
+            content: [{ type: "text", text: "Preview response" }],
+          }),
+          callId: null,
+          createdAtMs: now,
+        });
+        previewRuns.delete(runId);
+        publishPreview(run, {
+          type: "completed",
+          response_id: `preview-${runId}`,
+          input_tokens: null,
+          output_tokens: null,
+        });
+      }, 1_400),
+    );
     previewRuns.set(runId, run);
     return { runId };
   }
@@ -163,7 +198,7 @@ export async function cancelChat(runId: string): Promise<void> {
   if (!isTauri()) {
     const run = previewRuns.get(runId);
     if (run) {
-      if (run.timer) clearTimeout(run.timer);
+      clearPreviewTimers(run);
       previewRuns.delete(runId);
       publishPreview(run, { type: "cancelled" });
     }
@@ -176,7 +211,7 @@ export async function pauseChat(runId: string): Promise<void> {
   if (!isTauri()) {
     const run = previewRuns.get(runId);
     if (run) {
-      if (run.timer) clearTimeout(run.timer);
+      clearPreviewTimers(run);
       run.status = "paused";
       publishPreview(run, { type: "paused" });
     }

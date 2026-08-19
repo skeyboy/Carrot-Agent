@@ -54,6 +54,7 @@ export type AppSettings = {
 	maxModelSteps: number,
 	attachmentMaxMegabytes: number,
 	defaultStrategy: RunStrategy,
+	theme?: ThemePreference,
 };
 
 export type AttachmentDto = {
@@ -195,6 +196,8 @@ export type SettingsSnapshotDto = {
 	databasePath: string,
 	attachmentPath: string,
 };
+
+export type ThemePreference = "system" | "light" | "dark";
 
 export type ToolExecutionDto = {
 	id: string,

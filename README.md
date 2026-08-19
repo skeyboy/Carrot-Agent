@@ -2,7 +2,7 @@
 
 Carrot is a macOS-first desktop LLM client built with Tauri 2, Rust, Vue 3, and TypeScript. The architecture keeps provider calls, credentials, tools, persistence, and synchronization behind Rust-side ports while the WebView remains a typed presentation layer.
 
-Current milestone: P3 durable Agent Runtime completed, with the first P4 interaction slice landed. Carrot now supports OpenAI Responses and Chat Completions compatible adapters, committed Run/Item/Event history, a bounded ReAct tool loop, versioned plans, execution audit, SQLite-backed chat snapshots, stop/pause-to-edit replacement, and stable long-conversation layouts. Remaining P4 work includes same-run resume, pending input intents, lease takeover, side-effect reconciliation, and recovery UI.
+Current milestone: P3 durable Agent Runtime completed, with two P4 product-resilience slices landed. Carrot now supports OpenAI Responses and Chat Completions compatible adapters, committed Run/Item/Event history, a bounded ReAct tool loop, versioned plans, execution audit, SQLite-backed chat snapshots, stop/pause-to-edit replacement, persisted provider reasoning summaries, adaptive themes, and stable long-conversation layouts. Remaining P4 work includes same-run resume, pending input intents, lease takeover, side-effect reconciliation, approval, and recovery UI.
 
 ## Requirements
 
@@ -34,4 +34,5 @@ npm run check
 - [Phase 2 provider management supplement](docs/phase-2-provider-management.md)
 - [Phase 3 durable Agent Runtime report](docs/phase-3-durable-agent-runtime.md)
 - [Phase 4 chat experience slice](docs/phase-4-chat-experience.md)
+- [Phase 4 appearance and reasoning slice](docs/phase-4-appearance-and-reasoning.md)
 - [Architecture decision records](docs/adr/)
