@@ -1,4 +1,4 @@
-# 会话滚动接管与 Markdown 复制
+# 会话滚动接管、流式批处理与代码复制
 
 > 日期：2026-08-19
 
@@ -13,10 +13,13 @@
 - `ConversationThread.vue`：管理滚动容器、是否跟随最新内容以及 Run 状态；
 - `ThreadScrollIndicator.vue`：只负责状态展示和回到底部命令；
 - `MessageActions.vue`：只保留消息级 `Copy`，复制完整消息；
-- `MarkdownContent.vue`：按源码行映射拆分普通片段和多个 Markdown block，并保持原顺序渲染；
-- `MarkdownCopyButton.vue`：位于每个 Markdown block 右上角，只复制所属 block 的原始源码。
+- `MarkdownContent.vue`：按 MarkdownIt 顶层 block token 拆分内容并保持原顺序渲染；
+- `CodeBlockCopyButton.vue`：只位于 fenced/indented code block 右上角，复制所属代码块原始源码；
+- `renderBatcher.ts`：以 50ms 上限批量提交流式 delta，终态事件到达时立即 flush。
 
-Markdown 源码拆分复用 MarkdownIt token 和源码行映射，不用正则重新解释语法。标题、列表、引用、表格、代码块等分别形成可复制 block；包含强调、行内代码或链接的段落按完整段落处理。普通段落、禁用后的 HTML、非法链接与转义文本不显示 Markdown 复制入口。
+复制条件复用 MarkdownIt token 和源码行映射，不用正则或语言关键词猜测代码。只有 `fence` 与 `code_block` 提供复制；标题、列表、引用、表格、强调、链接和行内代码均正常渲染但不显示代码复制入口。
+
+Provider 高频 delta 不直接逐条修改 Vue 状态。首个 delta 建立 50ms 批次窗口，同一窗口内的文本和推理 delta 合并为一次响应式更新、一次 Markdown 解析和一次滚动。`completed`、`paused`、工具调用等顺序边界会同步 flush，`failed`、`cancelled` 和 Snapshot 重建会丢弃未提交的 stale delta。消息列表关闭 CSS scroll anchoring，避免浏览器锚定与应用自动跟随同时修改位置。
 
 ## 验收场景
 
@@ -25,5 +28,6 @@ Markdown 源码拆分复用 MarkdownIt token 和源码行映射，不用正则�
 3. 点击入口回到底部、隐藏入口，并恢复后续自动跟随；
 4. 用户自行滚到底部也自动隐藏入口和恢复跟随；
 5. 普通内容仅显示 `Copy`，复制完整消息；
-6. 混合内容中的每个 Markdown block 在自身右上角显示独立复制按钮；
-7. 每个 Markdown 按钮只复制所属 block 的源码，而不是其他 Markdown block、完整消息、渲染后纯文本或 HTML。
+6. 标题、列表、引用、强调和行内代码不显示代码复制按钮；
+7. 每个 fenced/indented code block 在自身右上角显示按钮，并只复制所属 block 源码；
+8. 高频 delta 在 50ms 内合并，终态前不丢失尾部文本，取消后不提交 stale delta。

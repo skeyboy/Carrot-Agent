@@ -6,7 +6,6 @@ const markdown = new MarkdownIt({
   linkify: false,
   typographer: false,
 });
-type MarkdownToken = ReturnType<typeof markdown.parse>[number];
 
 markdown.validateLink = (url) => /^(https?:|mailto:)/i.test(url.trim());
 markdown.renderer.rules.link_open = (tokens, index, options, _environment, renderer) => {
@@ -22,10 +21,11 @@ export function renderMarkdown(source: string): string {
 
 export interface MarkdownSegment {
   source: string;
-  isMarkdown: boolean;
+  isCode: boolean;
 }
 
-const markdownBlockTokens = new Set([
+const topLevelBlockTokens = new Set([
+  "paragraph_open",
   "blockquote_open",
   "bullet_list_open",
   "code_block",
@@ -36,28 +36,17 @@ const markdownBlockTokens = new Set([
   "table_open",
 ]);
 
-const plainInlineTokens = new Set(["softbreak", "text"]);
-
-export function extractMarkdownSource(source: string): string | null {
-  const extracted = parseMarkdownSegments(source)
-    .filter((segment) => segment.isMarkdown)
-    .map((segment) => segment.source)
-    .join("\n\n");
-
-  return extracted || null;
-}
-
 export function parseMarkdownSegments(source: string): MarkdownSegment[] {
-  const ranges = markdownRanges(source);
-  if (!ranges.length) return source.trim() ? [{ source, isMarkdown: false }] : [];
+  const ranges = topLevelBlockRanges(source);
+  if (!ranges.length) return source.trim() ? [{ source, isCode: false }] : [];
 
   const lines = source.split(/\r?\n/);
   const segments: MarkdownSegment[] = [];
   let cursor = 0;
 
-  ranges.forEach(({ start, end }) => {
+  ranges.forEach(({ start, end, isCode }) => {
     appendSegment(segments, lines.slice(cursor, start).join("\n"), false);
-    appendSegment(segments, lines.slice(start, end).join("\n"), true);
+    appendSegment(segments, lines.slice(start, end).join("\n"), isCode);
     cursor = end;
   });
   appendSegment(segments, lines.slice(cursor).join("\n"), false);
@@ -65,36 +54,21 @@ export function parseMarkdownSegments(source: string): MarkdownSegment[] {
   return segments;
 }
 
-function markdownRanges(source: string): Array<{ start: number; end: number }> {
-  const ranges = markdown
+function topLevelBlockRanges(
+  source: string,
+): Array<{ start: number; end: number; isCode: boolean }> {
+  return markdown
     .parse(source, {})
-    .filter(isMarkdownToken)
-    .flatMap((token) => (token.map ? [{ start: token.map[0], end: token.map[1] }] : []))
+    .filter((token) => token.level === 0 && token.map && topLevelBlockTokens.has(token.type))
+    .map((token) => ({
+      start: token.map![0],
+      end: token.map![1],
+      isCode: token.type === "fence" || token.type === "code_block",
+    }))
     .sort((left, right) => left.start - right.start || left.end - right.end);
-
-  if (!ranges.length) return [];
-
-  return ranges.reduce<Array<{ start: number; end: number }>>((result, range) => {
-    const previous = result[result.length - 1];
-    if (previous && range.start < previous.end) {
-      previous.end = Math.max(previous.end, range.end);
-    } else {
-      result.push({ ...range });
-    }
-    return result;
-  }, []);
 }
 
-function appendSegment(segments: MarkdownSegment[], source: string, isMarkdown: boolean) {
+function appendSegment(segments: MarkdownSegment[], source: string, isCode: boolean) {
   const normalized = source.replace(/^\s*\n/, "").replace(/\n\s*$/, "");
-  if (normalized.trim()) segments.push({ source: normalized, isMarkdown });
-}
-
-function isMarkdownToken(token: MarkdownToken): boolean {
-  if (!token.map) return false;
-  if (markdownBlockTokens.has(token.type)) return true;
-  return (
-    token.type === "inline" &&
-    (token.children?.some((child) => !plainInlineTokens.has(child.type)) ?? false)
-  );
+  if (normalized.trim()) segments.push({ source: normalized, isCode });
 }

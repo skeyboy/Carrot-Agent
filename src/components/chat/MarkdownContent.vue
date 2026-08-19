@@ -2,7 +2,7 @@
 import { computed } from "vue";
 
 import { parseMarkdownSegments, renderMarkdown } from "../../lib/markdown";
-import MarkdownCopyButton from "./MarkdownCopyButton.vue";
+import CodeBlockCopyButton from "./CodeBlockCopyButton.vue";
 
 const props = defineProps<{ source: string }>();
 const emit = defineEmits<{ error: [message: string] }>();
@@ -20,10 +20,10 @@ const segments = computed(() =>
       v-for="(segment, index) in segments"
       :key="`${index}-${segment.source}`"
       class="markdown-segment"
-      :class="{ 'has-copy': segment.isMarkdown }"
+      :class="{ 'has-copy': segment.isCode }"
     >
-      <MarkdownCopyButton
-        v-if="segment.isMarkdown"
+      <CodeBlockCopyButton
+        v-if="segment.isCode"
         :source="segment.source"
         @error="emit('error', $event)"
       />

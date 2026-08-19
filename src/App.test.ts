@@ -148,7 +148,7 @@ describe("App", () => {
 
     await wrapper.get('[aria-label="Message"]').setValue("Hello");
     await wrapper.get(".chat-composer form").trigger("submit");
-    await new Promise((resolve) => setTimeout(resolve, 140));
+    await new Promise((resolve) => setTimeout(resolve, 180));
     await flushPromises();
     expect(wrapper.get(".reasoning-disclosure").text()).toContain("Reviewing the request");
     expect(wrapper.get(".reasoning-live").text()).toContain("Reasoning");
@@ -254,7 +254,7 @@ describe("App", () => {
     expect(wrapper.findAll(".message.user")).toHaveLength(1);
     expect(wrapper.get(".message.user").text()).toContain("Final edit");
 
-    expect(wrapper.find(".message.user .markdown-copy-button").exists()).toBe(false);
+    expect(wrapper.find(".message.user .code-block-copy-button").exists()).toBe(false);
     await wrapper.get('[aria-label="Copy message"]').trigger("click");
     expect(writeText).toHaveBeenCalledWith("Final edit");
     await wrapper.get('[aria-label="Copy response"]').trigger("click");
@@ -318,8 +318,16 @@ describe("App", () => {
     await wrapper.get(".create-form").trigger("submit");
     await flushPromises();
 
-    const source =
-      "Plain intro.\n\n# Heading\n\n- **Bold item**\n\nPlain outro.\n\n<script>window.bad = true</script>\n\n[bad](javascript:alert(1))";
+    const source = [
+      "Plain intro.",
+      "# Heading",
+      "- **Bold item**",
+      "Use `inline code` here.",
+      "```ts\nconst value = 1;\n```",
+      "Plain outro.",
+      "<script>window.bad = true</script>",
+      "[bad](javascript:alert(1))",
+    ].join("\n\n");
     await wrapper.get('[aria-label="Message"]').setValue(source);
     await wrapper.get(".chat-composer form").trigger("submit");
     await new Promise((resolve) => setTimeout(resolve, 1_450));
@@ -332,13 +340,12 @@ describe("App", () => {
     expect(message.find('a[href^="javascript:"]').exists()).toBe(false);
     await wrapper.get('[aria-label="Copy message"]').trigger("click");
     expect(writeText).toHaveBeenCalledWith(source);
-    const markdownCopies = wrapper.findAll(
-      ".message.user .markdown-segment.has-copy [aria-label='Copy Markdown source']",
+    expect(message.get("code").text()).toBe("inline code");
+    const codeCopies = wrapper.findAll(
+      ".message.user .markdown-segment.has-copy [aria-label='Copy code block']",
     );
-    expect(markdownCopies).toHaveLength(2);
-    await markdownCopies[0]!.trigger("click");
-    expect(writeText).toHaveBeenLastCalledWith("# Heading");
-    await markdownCopies[1]!.trigger("click");
-    expect(writeText).toHaveBeenLastCalledWith("- **Bold item**");
+    expect(codeCopies).toHaveLength(1);
+    await codeCopies[0]!.trigger("click");
+    expect(writeText).toHaveBeenLastCalledWith("```ts\nconst value = 1;\n```");
   });
 });

@@ -28,6 +28,7 @@ import type {
   ToolApprovalDto,
   ToolExecutionDto,
 } from "../../bindings";
+import { createRenderBatcher } from "../../lib/renderBatcher";
 import AgentRunStatus from "./AgentRunStatus.vue";
 import ChatComposer from "./ChatComposer.vue";
 import ConversationMessage from "./ConversationMessage.vue";
@@ -45,6 +46,14 @@ interface DisplayMessage {
   reasoningDurationMs: number;
   reasoningRunning: boolean;
 }
+
+interface StreamDelta {
+  runId: string;
+  kind: "text" | "reasoning";
+  delta: string;
+}
+
+const STREAM_RENDER_BATCH_MS = 50;
 
 const props = defineProps<{ conversation: ConversationDto; supportsImages: boolean }>();
 const emit = defineEmits<{ error: [message: string] }>();
@@ -81,6 +90,20 @@ const queuedBranch = computed(() =>
   pendingInputs.value.find((input) => input.status === "pending" && input.intent !== "append"),
 );
 const responseInProgress = computed(() => starting.value || activeRun.value !== null);
+const streamDeltaBatcher = createRenderBatcher<StreamDelta>((deltas) => {
+  let updated = false;
+  deltas.forEach((delta) => {
+    const assistant = assistantForRun(delta.runId);
+    if (!assistant) return;
+    if (delta.kind === "text") assistant.text += delta.delta;
+    else {
+      assistant.reasoning += delta.delta;
+      assistant.reasoningRunning = true;
+    }
+    updated = true;
+  });
+  if (updated) scrollToLatest();
+}, STREAM_RENDER_BATCH_MS);
 let unlisten: (() => void) | undefined;
 let bufferedEvents: ChatEvent[] = [];
 let hydrating = true;
@@ -108,6 +131,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unlisten?.();
   if (recoveryPoll) clearInterval(recoveryPoll);
+  streamDeltaBatcher.dispose();
 });
 
 async function attach() {
@@ -220,6 +244,7 @@ async function send(text: string, intent: PendingInputIntent) {
       .forEach((event) => applyEvent(event));
     bufferedEvents = [];
   } catch (cause) {
+    streamDeltaBatcher.clear();
     messages.value = messages.value.filter(
       (message) => message.id !== userMessage.id && message.id !== assistantMessage.id,
     );
@@ -253,23 +278,18 @@ function applyEvent(payload: ChatEvent) {
   if (event.type === "started") {
     if (activeRun.value) activeRun.value.phase = "model_stream";
   } else if (event.type === "text_delta") {
-    const assistant = assistantForRun(payload.runId);
-    if (assistant) assistant.text += event.delta;
-    scrollToLatest();
+    streamDeltaBatcher.enqueue({ runId: payload.runId, kind: "text", delta: event.delta });
   } else if (event.type === "reasoning_delta") {
-    const assistant = assistantForRun(payload.runId);
-    if (assistant) {
-      assistant.reasoning += event.delta;
-      assistant.reasoningRunning = true;
-    }
-    scrollToLatest();
+    streamDeltaBatcher.enqueue({ runId: payload.runId, kind: "reasoning", delta: event.delta });
   } else if (event.type === "reasoning_completed") {
+    streamDeltaBatcher.flush();
     const assistant = assistantForRun(payload.runId);
     if (assistant) {
       assistant.reasoningDurationMs += event.duration_ms;
       assistant.reasoningRunning = false;
     }
   } else if (event.type === "tool_call") {
+    streamDeltaBatcher.flush();
     if (activeRun.value) activeRun.value.phase = "tool_execute";
     toolCount.value += 1;
     messages.value.push({
@@ -284,6 +304,7 @@ function applyEvent(payload: ChatEvent) {
     });
     scrollToLatest();
   } else if (event.type === "approval_required") {
+    streamDeltaBatcher.flush();
     activeRunId.value = null;
     if (activeRun.value) {
       activeRun.value.status = "waiting_for_approval";
@@ -292,6 +313,7 @@ function applyEvent(payload: ChatEvent) {
     }
     void refreshSnapshot();
   } else if (event.type === "failed") {
+    streamDeltaBatcher.clear();
     restoreActiveInput();
     messages.value = messages.value.filter((message) => message.runId !== payload.runId);
     activeRunId.value = null;
@@ -300,6 +322,7 @@ function applyEvent(payload: ChatEvent) {
     emit("error", event.message);
     void refreshSnapshot();
   } else if (event.type === "completed") {
+    streamDeltaBatcher.flush();
     const assistant = assistantForRun(payload.runId);
     if (assistant) assistant.settled = true;
     activeRunId.value = null;
@@ -308,6 +331,7 @@ function applyEvent(payload: ChatEvent) {
     controlBusy.value = false;
     void refreshSnapshot();
   } else if (event.type === "paused") {
+    streamDeltaBatcher.flush();
     activeRunId.value = null;
     const assistant = assistantForRun(payload.runId);
     if (assistant) assistant.settled = true;
@@ -321,6 +345,7 @@ function applyEvent(payload: ChatEvent) {
     if (pendingBranch.value) void launchPendingBranch();
     else void refreshSnapshot();
   } else if (event.type === "cancelled") {
+    streamDeltaBatcher.clear();
     restoreActiveInput();
     replacementRunId.value = payload.runId;
     messages.value = messages.value.filter((message) => message.runId !== payload.runId);
@@ -340,6 +365,7 @@ async function refreshSnapshot() {
 }
 
 function applySnapshot(snapshot: ChatSnapshotDto) {
+  streamDeltaBatcher.clear();
   const reasoningByRun = new Map<string, { text: string; durationMs: number }>();
   const lastAssistantByRun = new Map<string, string>();
   snapshot.items.forEach((item) => {

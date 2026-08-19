@@ -20,17 +20,17 @@ async function copySource() {
       copied.value = false;
     }, 1600);
   } catch {
-    emit("error", "The Markdown source could not be copied");
+    emit("error", "The code block could not be copied");
   }
 }
 </script>
 
 <template>
   <button
-    class="markdown-copy-button"
+    class="code-block-copy-button"
     type="button"
-    :title="copied ? 'Markdown copied' : 'Copy Markdown source'"
-    :aria-label="copied ? 'Markdown source copied' : 'Copy Markdown source'"
+    :title="copied ? 'Code copied' : 'Copy code block'"
+    :aria-label="copied ? 'Code block copied' : 'Copy code block'"
     @click="copySource"
   >
     <Check v-if="copied" :size="13" aria-hidden="true" />

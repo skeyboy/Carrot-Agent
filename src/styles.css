@@ -1116,6 +1116,7 @@ button {
   align-content: start;
   gap: 18px;
   overflow-y: auto;
+  overflow-anchor: none;
   overscroll-behavior: contain;
   padding: 26px max(28px, calc((100% - 760px) / 2));
 }
@@ -1225,7 +1226,7 @@ button {
 .markdown-segment-content > :last-child {
   margin-bottom: 0;
 }
-.markdown-copy-button {
+.code-block-copy-button {
   position: absolute;
   top: 0;
   right: 0;
@@ -1244,14 +1245,14 @@ button {
     background-color 120ms ease,
     transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
 }
-.markdown-copy-button:hover {
+.code-block-copy-button:hover {
   color: var(--text-primary);
   background: var(--surface-muted);
 }
-.markdown-copy-button:active {
+.code-block-copy-button:active {
   transform: scale(0.97);
 }
-.markdown-copy-button:focus-visible {
+.code-block-copy-button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -1704,7 +1705,7 @@ body,
   background: #29261d;
 }
 :root[data-theme="dark"] .message-actions button:hover,
-:root[data-theme="dark"] .markdown-copy-button:hover,
+:root[data-theme="dark"] .code-block-copy-button:hover,
 :root[data-theme="dark"] .attachment-strip button:hover,
 :root[data-theme="dark"] .icon-button:hover {
   background: var(--surface-muted);
