@@ -260,6 +260,15 @@ button {
   min-height: 0;
   overflow-y: auto;
   padding: 8px;
+  transition: opacity 160ms ease;
+}
+.sidebar.settings-open .conversation-list {
+  opacity: 0.48;
+  pointer-events: none;
+  user-select: none;
+}
+.sidebar.settings-open .conversation-row:hover {
+  background: transparent;
 }
 .list-status {
   padding: 24px 10px;

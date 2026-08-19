@@ -39,4 +39,5 @@ For native macOS debugging, open `Carrot.xcodeproj` and use the shared Carrot sc
 - [Phase 4 appearance, reasoning and recovery slice](docs/phase-4-appearance-and-reasoning.md)
 - [Phase 4 resilience, approval and macOS hardening report](docs/phase-4-resilience-and-macos.md)
 - [Phase 4 Markdown experience and Xcode debugging supplement](docs/phase-4-markdown-and-xcode.md)
+- [Phase 4 multi-conversation and provider recovery supplement](docs/phase-4-multiconversation-and-provider-recovery.md)
 - [Architecture decision records](docs/adr/)

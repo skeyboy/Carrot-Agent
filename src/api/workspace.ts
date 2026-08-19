@@ -37,7 +37,7 @@ function initialPreviewProviders(): ProviderProfileDto[] {
       enabledModels: ["local-model"],
       modelsSyncedAtMs: null,
       storeResponses: true,
-      capabilities: { tools: true, images: true, files: false },
+      capabilities: { tools: true, images: false, files: false },
     },
   ];
 }

@@ -95,8 +95,23 @@ function openWorkspace() {
 }
 
 function openSettings(section: SettingsSection = "providers") {
+  isCreating.value = false;
+  editingId.value = null;
   settingsSection.value = section;
   appView.value = "settings";
+}
+
+function selectConversation(id: string) {
+  selectedId.value = id;
+  openWorkspace();
+}
+
+function providerSupportsImages(conversation: ConversationDto) {
+  return (
+    providers.value.profiles.find(
+      (provider) => provider.id === conversation.defaultProviderProfileId,
+    )?.capabilities.images ?? false
+  );
 }
 
 async function saveSettings(settings: import("./bindings").AppSettings) {
@@ -280,7 +295,7 @@ onMounted(loadWorkspace);
 
 <template>
   <div class="app-shell">
-    <aside class="sidebar">
+    <aside class="sidebar" :class="{ 'settings-open': appView === 'settings' }">
       <header class="brand-row">
         <button class="brand-mark" type="button" aria-label="Open workspace" @click="openWorkspace">
           C
@@ -294,6 +309,7 @@ onMounted(loadWorkspace);
           type="button"
           title="New conversation"
           aria-label="New conversation"
+          :disabled="appView === 'settings'"
           @click="isCreating = !isCreating"
         >
           <Plus :size="17" aria-hidden="true" />
@@ -321,23 +337,26 @@ onMounted(loadWorkspace);
         </div>
       </form>
 
-      <nav class="conversation-list" aria-label="Conversations">
+      <nav
+        class="conversation-list"
+        aria-label="Conversations"
+        :aria-disabled="appView === 'settings'"
+        :inert="appView === 'settings'"
+      >
         <div v-if="isLoading" class="list-status">Loading…</div>
         <div v-else-if="conversations.length === 0" class="list-status">No conversations</div>
         <article
           v-for="conversation in conversations"
           :key="conversation.id"
           class="conversation-row"
-          :class="{ selected: selectedId === conversation.id }"
+          :class="{ selected: appView === 'workspace' && selectedId === conversation.id }"
         >
           <button
             v-if="editingId !== conversation.id"
             class="conversation-select"
             type="button"
-            @click="
-              selectedId = conversation.id;
-              openWorkspace();
-            "
+            :disabled="appView === 'settings'"
+            @click="selectConversation(conversation.id)"
           >
             <MessageSquare :size="16" aria-hidden="true" />
             <span>
@@ -352,6 +371,7 @@ onMounted(loadWorkspace);
                 v-model="editingTitle"
                 maxlength="200"
                 aria-label="Conversation title"
+                :disabled="appView === 'settings'"
                 @keydown.enter.prevent="saveRename(conversation)"
                 @keydown.escape="editingId = null"
               />
@@ -365,6 +385,7 @@ onMounted(loadWorkspace);
               type="button"
               title="Rename conversation"
               aria-label="Rename conversation"
+              :disabled="appView === 'settings'"
               @click="beginRename(conversation)"
             >
               <Pencil :size="14" aria-hidden="true" />
@@ -375,6 +396,7 @@ onMounted(loadWorkspace);
               type="button"
               title="Save title"
               aria-label="Save title"
+              :disabled="appView === 'settings'"
               @click="saveRename(conversation)"
             >
               <Check :size="15" aria-hidden="true" />
@@ -384,6 +406,7 @@ onMounted(loadWorkspace);
               type="button"
               title="Delete conversation"
               aria-label="Delete conversation"
+              :disabled="appView === 'settings'"
               @click="removeConversation(conversation)"
             >
               <Trash2 :size="14" aria-hidden="true" />
@@ -429,19 +452,21 @@ onMounted(loadWorkspace);
         @delete-credential="removeCredential"
       />
 
-      <template v-else-if="selectedConversation">
-        <header class="conversation-header">
-          <MessageSquare :size="15" aria-hidden="true" />
-          <h1>{{ selectedConversation.title }}</h1>
-        </header>
+      <header v-if="appView === 'workspace' && selectedConversation" class="conversation-header">
+        <MessageSquare :size="15" aria-hidden="true" />
+        <h1>{{ selectedConversation.title }}</h1>
+      </header>
+      <KeepAlive>
         <ConversationThread
+          v-if="appView === 'workspace' && selectedConversation"
           :key="selectedConversation.id"
           :conversation="selectedConversation"
+          :supports-images="providerSupportsImages(selectedConversation)"
           @error="error = $event"
         />
-      </template>
+      </KeepAlive>
 
-      <section v-else class="empty-workspace">
+      <section v-if="appView === 'workspace' && !selectedConversation" class="empty-workspace">
         <div class="brand-mark large" aria-hidden="true">C</div>
         <h1>Carrot</h1>
         <button class="primary-button" type="button" @click="isCreating = true">

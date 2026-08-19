@@ -45,7 +45,7 @@ interface DisplayMessage {
   reasoningRunning: boolean;
 }
 
-const props = defineProps<{ conversation: ConversationDto }>();
+const props = defineProps<{ conversation: ConversationDto; supportsImages: boolean }>();
 const emit = defineEmits<{ error: [message: string] }>();
 const messages = ref<DisplayMessage[]>([]);
 const messageList = ref<HTMLElement | null>(null);
@@ -288,6 +288,8 @@ function applyEvent(payload: ChatEvent) {
     }
     void refreshSnapshot();
   } else if (event.type === "failed") {
+    restoreActiveInput();
+    messages.value = messages.value.filter((message) => message.runId !== payload.runId);
     activeRunId.value = null;
     activeRun.value = null;
     controlBusy.value = false;
@@ -718,6 +720,7 @@ function errorMessage(cause: unknown) {
       :running="activeRunId !== null"
       :attaching="attaching"
       :busy="controlBusy"
+      :supports-images="supportsImages"
       @send="send"
       @attach="attach"
       @remove-attachment="discardAttachment"

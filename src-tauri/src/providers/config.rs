@@ -338,6 +338,7 @@ mod tests {
             .expect("example configuration should be valid");
         assert_eq!(profiles.profiles.len(), 2);
         assert!(profiles.profiles[0].store_responses);
+        assert!(!profiles.profiles[1].capabilities.images);
         assert_eq!(profiles.default_provider_id, "openai");
     }
 

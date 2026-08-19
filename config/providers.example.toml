@@ -31,5 +31,5 @@ enabled_models = ["replace-with-model-id"]
 credential_ref = "local-compatible-api-key"
 store_responses = true
 supports_tools = true
-supports_images = true
+supports_images = false
 supports_files = false

@@ -340,6 +340,16 @@ impl RunStore for SqliteRunStore {
                     .execute(connection)
                     .await?;
                 }
+                if matches!(transition.status, RunStatus::Failed | RunStatus::Cancelled) {
+                    diesel::update(
+                        items::table
+                            .filter(items::run_id.eq(run_id))
+                            .filter(items::status.eq("committed")),
+                    )
+                    .set(items::status.eq("abandoned"))
+                    .execute(connection)
+                    .await?;
+                }
                 upsert_run_snapshot(
                     connection,
                     &row,
@@ -2337,6 +2347,49 @@ mod tests {
             executable[0].idempotency_key.as_deref(),
             Some("write_file:report-v1")
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_multimodal_run_does_not_poison_later_context() {
+        let (store, conversation_id) = setup("failed-image").await;
+        let mut failed = new_run("run-image", &conversation_id);
+        failed.user_content = serde_json::json!({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this image"},
+                {"type": "image_data_url", "data_url": "data:image/png;base64,AA==", "detail": "auto"}
+            ]
+        });
+        store.start(failed).await.unwrap();
+        store
+            .transition(
+                "run-image",
+                RunTransition {
+                    status: RunStatus::Failed,
+                    phase: RunPhase::None,
+                    event_kind: "run_failed".to_owned(),
+                    payload: serde_json::json!({"reason": "unsupported multimodal request"}),
+                    stop_reason: Some("model does not support images".to_owned()),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            store
+                .conversation_items(&conversation_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        store
+            .start(new_run("run-text", &conversation_id))
+            .await
+            .unwrap();
+        let replayable = store.conversation_items(&conversation_id).await.unwrap();
+        assert_eq!(replayable.len(), 1);
+        assert_eq!(replayable[0].run_id, "run-text");
     }
 
     async fn pause_run(store: &SqliteRunStore, run_id: &str) {

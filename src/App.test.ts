@@ -61,6 +61,24 @@ describe("App", () => {
     expect(wrapper.findAll(".sidebar-footer-row")).toHaveLength(1);
   });
 
+  it("keeps conversation navigation inactive while settings are open", async () => {
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get('[aria-label="New conversation"]').trigger("click");
+    await wrapper.get("#conversation-title").setValue("Settings boundary");
+    await wrapper.get(".create-form").trigger("submit");
+    await flushPromises();
+
+    await wrapper.get(".sidebar-footer-row").trigger("click");
+
+    expect(wrapper.get(".sidebar").classes()).toContain("settings-open");
+    expect(wrapper.get(".conversation-list").attributes("aria-disabled")).toBe("true");
+    expect(wrapper.get(".conversation-select").attributes("disabled")).toBeDefined();
+    expect(wrapper.get('[aria-label="New conversation"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.find(".conversation-header").exists()).toBe(false);
+    expect(wrapper.find(".settings-page").exists()).toBe(true);
+  });
+
   it("edits provider defaults and model selection in settings", async () => {
     const wrapper = mount(App);
     await flushPromises();
@@ -140,6 +158,49 @@ describe("App", () => {
 
     const user = wrapper.get(".message.user");
     expect(user.element.lastElementChild?.tagName.toLowerCase()).toBe("svg");
+  });
+
+  it("keeps independent streaming sessions alive while switching conversations", async () => {
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await wrapper.get('[aria-label="New conversation"]').trigger("click");
+    await wrapper.get("#conversation-title").setValue("First topic");
+    await wrapper.get(".create-form").trigger("submit");
+    await flushPromises();
+    await wrapper.get('[aria-label="Message"]').setValue("First request");
+    await wrapper.get(".chat-composer form").trigger("submit");
+    await new Promise((resolve) => setTimeout(resolve, 140));
+
+    await wrapper.get('[aria-label="New conversation"]').trigger("click");
+    await wrapper.get("#conversation-title").setValue("Second topic");
+    await wrapper.get(".create-form").trigger("submit");
+    await flushPromises();
+    await wrapper.get('[aria-label="Message"]').setValue("Second request");
+    await wrapper.get(".chat-composer form").trigger("submit");
+    await new Promise((resolve) => setTimeout(resolve, 140));
+
+    const firstTopic = wrapper
+      .findAll(".conversation-select")
+      .find((button) => button.text().includes("First topic"));
+    expect(firstTopic).toBeTruthy();
+    await firstTopic!.trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 1_250));
+    await flushPromises();
+    expect(wrapper.get(".conversation-header").text()).toContain("First topic");
+    expect(wrapper.text()).toContain("First request");
+    expect(wrapper.text()).toContain("Preview response");
+
+    const secondTopic = wrapper
+      .findAll(".conversation-select")
+      .find((button) => button.text().includes("Second topic"));
+    expect(secondTopic).toBeTruthy();
+    await secondTopic!.trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await flushPromises();
+    expect(wrapper.get(".conversation-header").text()).toContain("Second topic");
+    expect(wrapper.text()).toContain("Second request");
+    expect(wrapper.text()).toContain("Preview response");
   });
 
   it("keeps paused content until edit is chosen, then copies the completed answer", async () => {

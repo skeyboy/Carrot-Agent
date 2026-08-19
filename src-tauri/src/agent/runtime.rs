@@ -651,7 +651,7 @@ async fn stream_once(
                     arguments: arguments.clone(),
                 }),
                 ProviderEvent::Failed { message } => {
-                    return Err(RuntimeError::Provider(message.clone()));
+                    return Err(provider_failure(message.clone()));
                 }
                 ProviderEvent::Cancelled => return Err(RuntimeError::Cancelled),
                 ProviderEvent::Completed { .. } => completed = Some(event.clone()),
@@ -666,7 +666,7 @@ async fn stream_once(
         }
         task.await
             .map_err(|error| RuntimeError::Provider(error.to_string()))?
-            .map_err(|error| RuntimeError::Provider(error.to_string()))?;
+            .map_err(|error| provider_failure(error.to_string()))?;
         Ok(ModelOutcome {
             text,
             reasoning_duration_ms: if reasoning.is_empty() {
@@ -691,6 +691,18 @@ async fn stream_once(
     }
 }
 
+fn provider_failure(message: String) -> RuntimeError {
+    let normalized = message.to_ascii_lowercase();
+    if normalized.contains("multimodal data") && normalized.contains("does not support multimodal")
+    {
+        return RuntimeError::Provider(
+            "the selected model rejected image input; choose an image-capable model or remove the attachment"
+                .to_owned(),
+        );
+    }
+    RuntimeError::Provider(message)
+}
+
 fn message_text(message: &ProviderMessage) -> String {
     message
         .content
@@ -713,7 +725,7 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
-    use super::{AgentRuntime, RuntimeInput};
+    use super::{AgentRuntime, RuntimeError, RuntimeInput, provider_failure};
     use crate::domain::conversation::NewConversation;
     use crate::domain::provider::{
         ProviderCapabilities, ProviderKind, ProviderProfile, ProviderProtocol,
@@ -755,6 +767,19 @@ mod tests {
     }
 
     struct ImmediateProvider;
+
+    #[test]
+    fn explains_unsupported_multimodal_requests() {
+        let error = provider_failure(
+            "API error: Multimodal data provided, but model does not support multimodal requests."
+                .to_owned(),
+        );
+        assert!(matches!(
+            error,
+            RuntimeError::Provider(message)
+                if message == "the selected model rejected image input; choose an image-capable model or remove the attachment"
+        ));
+    }
 
     #[async_trait]
     impl LlmProvider for ImmediateProvider {

@@ -8,6 +8,7 @@ const props = defineProps<{
   running: boolean;
   attaching: boolean;
   busy: boolean;
+  supportsImages: boolean;
 }>();
 const text = defineModel<string>({ default: "" });
 const intent = defineModel<PendingInputIntent>("intent", { default: "append" });
@@ -52,9 +53,9 @@ function submit() {
       <button
         class="icon-button"
         type="button"
-        title="Attach image"
+        :title="supportsImages ? 'Attach image' : 'Selected model does not support images'"
         aria-label="Attach image"
-        :disabled="attaching"
+        :disabled="attaching || !supportsImages"
         @click="emit('attach')"
       >
         <Paperclip :size="17" />
