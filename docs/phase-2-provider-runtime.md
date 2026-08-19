@@ -14,7 +14,7 @@ P0 工程基线和 P1 本地持久化已经完成，Git 工作区干净。可复
 
 | 能力                                        | 状态 | 主要位置                                                  |
 | ------------------------------------------- | ---- | --------------------------------------------------------- |
-| 侧栏底部 Provider/Settings 入口             | 完成 | `components/SidebarSettingsNav.vue`                       |
+| 侧栏底部 Settings 入口                      | 完成 | `components/SidebarSettingsNav.vue`                       |
 | 左目录、右内容的分区设置中心                | 完成 | `components/settings/`                                    |
 | 异步 `settings.toml` 读写和校验             | 完成 | `src-tauri/src/settings/`                                 |
 | macOS Keychain 凭据 Adapter                 | 完成 | `src-tauri/src/credentials/mod.rs`                        |
@@ -28,9 +28,9 @@ P0 工程基线和 P1 本地持久化已经完成，Git 工作区干净。可复
 
 ## 设置设计
 
-设置入口固定在会话侧栏最下方，同时提供 Provider 快捷入口。设置页面按 Providers、Runtime、Storage、Sync、About 分区：
+设置入口固定在会话侧栏最下方，Provider 管理只存在于设置中心。设置页面按 Providers、Runtime、Storage、Sync、About 分区：
 
-- Providers 展示配置文件路径、协议、Base URL、默认模型、`store_responses`、图片能力和 Keychain 状态，可保存、替换和删除 API Key；
+- Providers 展示并编辑配置文件、默认 Provider、Base URL、模型目录、启用/默认模型、能力和 Keychain 状态；完整补充见 [Provider 管理报告](phase-2-provider-management.md)；
 - Runtime 保存默认策略、请求超时和最大模型步骤；
 - Storage 保存图片大小限制并显示数据库、附件和设置文件路径；
 - Sync 只显示 P4 计划状态，不提供伪造的可用开关；

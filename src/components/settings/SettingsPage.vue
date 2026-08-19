@@ -4,10 +4,12 @@ import { ref, watch } from "vue";
 
 import type {
   AppSettings,
+  CreateProviderProfileRequest,
   CredentialStatusDto,
   HealthStatus,
   ProviderProfilesDto,
   SettingsSnapshotDto,
+  UpdateProviderProfileRequest,
 } from "../../bindings";
 import AboutSettings from "./AboutSettings.vue";
 import ProviderSettings from "./ProviderSettings.vue";
@@ -25,10 +27,15 @@ const props = defineProps<{
   health: HealthStatus | null;
   reloadingProviders: boolean;
   savingSettings: boolean;
-  savingCredentialId: string | null;
+  busyProviderId: string | null;
 }>();
 const emit = defineEmits<{
   reloadProviders: [];
+  createProvider: [request: CreateProviderProfileRequest];
+  updateProvider: [request: UpdateProviderProfileRequest];
+  deleteProvider: [providerId: string];
+  setDefaultProvider: [providerId: string];
+  syncProviderModels: [providerId: string];
   saveSettings: [settings: AppSettings];
   saveCredential: [providerId: string, secret: string];
   deleteCredential: [providerId: string];
@@ -102,8 +109,13 @@ function saveDraft() {
           :providers="providers"
           :credential-statuses="credentialStatuses"
           :reloading="reloadingProviders"
-          :saving-credential-id="savingCredentialId"
+          :busy-provider-id="busyProviderId"
           @reload="emit('reloadProviders')"
+          @create="emit('createProvider', $event)"
+          @update="emit('updateProvider', $event)"
+          @delete="emit('deleteProvider', $event)"
+          @set-default="emit('setDefaultProvider', $event)"
+          @sync-models="emit('syncProviderModels', $event)"
           @save-credential="forwardCredential"
           @delete-credential="emit('deleteCredential', $event)"
         />

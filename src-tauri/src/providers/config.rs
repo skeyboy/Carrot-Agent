@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 
 use crate::domain::provider::{
-    ProviderCapabilities, ProviderKind, ProviderProfile, ProviderProtocol,
+    ProviderCapabilities, ProviderCatalog, ProviderKind, ProviderProfile, ProviderProtocol,
 };
 
 const DEFAULT_CONFIG: &str = include_str!("../../../config/providers.example.toml");
@@ -20,13 +20,17 @@ pub enum ProviderConfigError {
     Invalid(String),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ProviderConfigFile {
+    #[serde(default = "legacy_version")]
+    version: u32,
+    #[serde(default)]
+    default_provider_id: Option<String>,
     providers: Vec<ProviderProfileConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ProviderProfileConfig {
     id: String,
@@ -36,6 +40,12 @@ struct ProviderProfileConfig {
     protocol: ProviderProtocol,
     base_url: String,
     default_model: String,
+    #[serde(default)]
+    available_models: Vec<String>,
+    #[serde(default)]
+    enabled_models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    models_synced_at_ms: Option<i64>,
     credential_ref: String,
     #[serde(default = "default_true")]
     store_responses: bool,
@@ -66,13 +76,29 @@ impl TryFrom<ProviderProfileConfig> for ProviderProfile {
             )));
         }
 
+        let default_model = config.default_model.trim().to_owned();
+        let mut available_models = normalize_models(config.available_models)?;
+        let mut enabled_models = normalize_models(config.enabled_models)?;
+        if available_models.is_empty() {
+            available_models.push(default_model.clone());
+        }
+        if enabled_models.is_empty() {
+            enabled_models.push(default_model.clone());
+        }
+        if !enabled_models.contains(&default_model) {
+            enabled_models.push(default_model.clone());
+        }
+
         Ok(Self {
             id: config.id,
-            label: config.label,
+            label: config.label.trim().to_owned(),
             kind: config.kind,
             protocol: config.protocol,
             base_url: config.base_url.trim_end_matches('/').to_owned(),
-            default_model: config.default_model,
+            default_model,
+            available_models,
+            enabled_models,
+            models_synced_at_ms: config.models_synced_at_ms,
             credential_ref: config.credential_ref,
             store_responses: config.store_responses,
             capabilities: ProviderCapabilities {
@@ -98,7 +124,7 @@ impl ProviderConfigLoader {
         &self.path
     }
 
-    pub async fn ensure_and_load(&self) -> Result<Vec<ProviderProfile>, ProviderConfigError> {
+    pub async fn ensure_and_load(&self) -> Result<ProviderCatalog, ProviderConfigError> {
         if tokio::fs::try_exists(&self.path)
             .await
             .map_err(|error| ProviderConfigError::Read(error.to_string()))?
@@ -117,16 +143,41 @@ impl ProviderConfigLoader {
         self.load().await
     }
 
-    pub async fn load(&self) -> Result<Vec<ProviderProfile>, ProviderConfigError> {
+    pub async fn load(&self) -> Result<ProviderCatalog, ProviderConfigError> {
         let source = tokio::fs::read_to_string(&self.path)
             .await
             .map_err(|error| ProviderConfigError::Read(error.to_string()))?;
         Self::parse(&source)
     }
 
-    fn parse(source: &str) -> Result<Vec<ProviderProfile>, ProviderConfigError> {
+    pub async fn save(
+        &self,
+        catalog: &ProviderCatalog,
+    ) -> Result<ProviderCatalog, ProviderConfigError> {
+        let file = ProviderConfigFile::from(catalog);
+        let source = toml::to_string_pretty(&file)
+            .map_err(|error| ProviderConfigError::Write(error.to_string()))?;
+        let normalized = Self::parse(&source)?;
+        let temporary = self.path.with_extension("toml.tmp");
+        tokio::fs::write(&temporary, source)
+            .await
+            .map_err(|error| ProviderConfigError::Write(error.to_string()))?;
+        tokio::fs::rename(&temporary, &self.path)
+            .await
+            .map_err(|error| ProviderConfigError::Write(error.to_string()))?;
+        Ok(normalized)
+    }
+
+    fn parse(source: &str) -> Result<ProviderCatalog, ProviderConfigError> {
         let file: ProviderConfigFile = toml::from_str(source)
             .map_err(|error| ProviderConfigError::Invalid(error.to_string()))?;
+        if file.version > current_version() {
+            return Err(ProviderConfigError::Invalid(format!(
+                "provider configuration version {} is newer than supported version {}",
+                file.version,
+                current_version()
+            )));
+        }
         if file.providers.is_empty() {
             return Err(ProviderConfigError::Invalid(
                 "at least one provider is required".to_owned(),
@@ -145,8 +196,65 @@ impl ProviderConfigLoader {
             }
             profiles.push(profile);
         }
-        Ok(profiles)
+        let default_provider_id = file
+            .default_provider_id
+            .unwrap_or_else(|| profiles[0].id.clone());
+        if !profiles
+            .iter()
+            .any(|profile| profile.id == default_provider_id)
+        {
+            return Err(ProviderConfigError::Invalid(format!(
+                "default provider '{default_provider_id}' does not exist"
+            )));
+        }
+        Ok(ProviderCatalog {
+            default_provider_id,
+            profiles,
+        })
     }
+}
+
+impl From<&ProviderCatalog> for ProviderConfigFile {
+    fn from(catalog: &ProviderCatalog) -> Self {
+        Self {
+            version: current_version(),
+            default_provider_id: Some(catalog.default_provider_id.clone()),
+            providers: catalog
+                .profiles
+                .iter()
+                .map(ProviderProfileConfig::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<&ProviderProfile> for ProviderProfileConfig {
+    fn from(profile: &ProviderProfile) -> Self {
+        Self {
+            id: profile.id.clone(),
+            label: profile.label.clone(),
+            kind: profile.kind,
+            protocol: profile.protocol,
+            base_url: profile.base_url.clone(),
+            default_model: profile.default_model.clone(),
+            available_models: profile.available_models.clone(),
+            enabled_models: profile.enabled_models.clone(),
+            models_synced_at_ms: profile.models_synced_at_ms,
+            credential_ref: profile.credential_ref.clone(),
+            store_responses: profile.store_responses,
+            supports_tools: profile.capabilities.tools,
+            supports_images: profile.capabilities.images,
+            supports_files: profile.capabilities.files,
+        }
+    }
+}
+
+fn current_version() -> u32 {
+    2
+}
+
+fn legacy_version() -> u32 {
+    1
 }
 
 fn default_protocol() -> ProviderProtocol {
@@ -155,6 +263,23 @@ fn default_protocol() -> ProviderProtocol {
 
 fn default_true() -> bool {
     true
+}
+
+fn normalize_models(models: Vec<String>) -> Result<Vec<String>, ProviderConfigError> {
+    let mut normalized = Vec::new();
+    for model in models {
+        let model = model.trim().to_owned();
+        validate_not_blank("model id", &model)?;
+        if model.chars().count() > 200 {
+            return Err(ProviderConfigError::Invalid(
+                "provider model id cannot be longer than 200 characters".to_owned(),
+            ));
+        }
+        if !normalized.contains(&model) {
+            normalized.push(model);
+        }
+    }
+    Ok(normalized)
 }
 
 fn validate_id(id: &str) -> Result<(), ProviderConfigError> {
@@ -211,8 +336,9 @@ mod tests {
     fn parses_example_configuration() {
         let profiles = ProviderConfigLoader::parse(super::DEFAULT_CONFIG)
             .expect("example configuration should be valid");
-        assert_eq!(profiles.len(), 2);
-        assert!(profiles[0].store_responses);
+        assert_eq!(profiles.profiles.len(), 2);
+        assert!(profiles.profiles[0].store_responses);
+        assert_eq!(profiles.default_provider_id, "openai");
     }
 
     #[test]
@@ -240,6 +366,25 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn upgrades_legacy_configuration_in_memory() {
+        let legacy = super::DEFAULT_CONFIG
+            .lines()
+            .filter(|line| {
+                !line.starts_with("version =")
+                    && !line.starts_with("default_provider_id =")
+                    && !line.starts_with("available_models =")
+                    && !line.starts_with("enabled_models =")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let catalog = ProviderConfigLoader::parse(&legacy).unwrap();
+
+        assert_eq!(catalog.default_provider_id, "openai");
+        assert_eq!(catalog.profiles[0].enabled_models, vec!["gpt-5.6"]);
+    }
+
     #[tokio::test]
     async fn creates_a_local_configuration_file_when_missing() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -251,7 +396,30 @@ mod tests {
             .await
             .expect("configuration should be created");
 
-        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles.profiles.len(), 2);
         assert!(path.is_file());
+    }
+
+    #[tokio::test]
+    async fn saves_default_provider_and_model_selection() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("providers.toml");
+        let loader = ProviderConfigLoader::new(path);
+        let mut catalog = loader.ensure_and_load().await.unwrap();
+        catalog.default_provider_id = "local-compatible".to_owned();
+        catalog.profiles[0]
+            .available_models
+            .push("gpt-secondary".to_owned());
+        catalog.profiles[0]
+            .enabled_models
+            .push("gpt-secondary".to_owned());
+        catalog.profiles[0].default_model = "gpt-secondary".to_owned();
+
+        loader.save(&catalog).await.unwrap();
+        let reloaded = loader.load().await.unwrap();
+
+        assert_eq!(reloaded.default_provider_id, "local-compatible");
+        assert_eq!(reloaded.profiles[0].default_model, "gpt-secondary");
+        assert_eq!(reloaded.profiles[0].enabled_models.len(), 2);
     }
 }

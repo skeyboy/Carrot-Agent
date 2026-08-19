@@ -12,6 +12,11 @@ export const commands = {
 	conversationDelete: (request: DeleteConversationRequest) => typedError<null, AppError>(__TAURI_INVOKE("conversation_delete", { request })),
 	providerProfileList: () => typedError<ProviderProfilesDto, AppError>(__TAURI_INVOKE("provider_profile_list")),
 	providerProfileReload: () => typedError<ProviderProfilesDto, AppError>(__TAURI_INVOKE("provider_profile_reload")),
+	providerProfileCreate: (request: CreateProviderProfileRequest) => typedError<ProviderProfilesDto, AppError>(__TAURI_INVOKE("provider_profile_create", { request })),
+	providerProfileUpdate: (request: UpdateProviderProfileRequest) => typedError<ProviderProfilesDto, AppError>(__TAURI_INVOKE("provider_profile_update", { request })),
+	providerProfileDelete: (providerId: string) => typedError<ProviderProfilesDto, AppError>(__TAURI_INVOKE("provider_profile_delete", { providerId })),
+	providerProfileSetDefault: (providerId: string) => typedError<ProviderProfilesDto, AppError>(__TAURI_INVOKE("provider_profile_set_default", { providerId })),
+	providerModelSync: (providerId: string) => typedError<ProviderProfilesDto, AppError>(__TAURI_INVOKE("provider_model_sync", { providerId })),
 	settingsGet: () => typedError<SettingsSnapshotDto, AppError>(__TAURI_INVOKE("settings_get")),
 	settingsUpdate: (request: UpdateSettingsRequest) => typedError<SettingsSnapshotDto, AppError>(__TAURI_INVOKE("settings_update", { request })),
 	credentialStatusList: () => typedError<CredentialStatusDto[], AppError>(__TAURI_INVOKE("credential_status_list")),
@@ -78,6 +83,17 @@ export type CreateConversationRequest = {
 	model: string | null,
 };
 
+export type CreateProviderProfileRequest = {
+	id: string,
+	label: string,
+	kind: ProviderKind,
+	protocol: ProviderProtocol,
+	baseUrl: string,
+	defaultModel: string,
+	storeResponses: boolean,
+	capabilities: ProviderCapabilitiesDto,
+};
+
 export type CredentialStatusDto = {
 	providerId: string,
 	configured: boolean,
@@ -101,6 +117,8 @@ export type ProviderCapabilitiesDto = {
 	files: boolean,
 };
 
+export type ProviderKind = "openai_responses" | "openai_compatible";
+
 export type ProviderProfileDto = {
 	id: string,
 	label: string,
@@ -108,14 +126,20 @@ export type ProviderProfileDto = {
 	protocol: string,
 	baseUrl: string,
 	defaultModel: string,
+	availableModels: string[],
+	enabledModels: string[],
+	modelsSyncedAtMs: string | null,
 	storeResponses: boolean,
 	capabilities: ProviderCapabilitiesDto,
 };
 
 export type ProviderProfilesDto = {
 	configPath: string,
+	defaultProviderId: string,
 	profiles: ProviderProfileDto[],
 };
+
+export type ProviderProtocol = "responses" | "chat_completions";
 
 export type RunStrategy = "fast" | "auto" | "quality";
 
@@ -137,6 +161,16 @@ export type UpdateConversationRequest = {
 	title: string | null,
 	defaultProviderProfileId: string | null,
 	defaultModel: string | null,
+};
+
+export type UpdateProviderProfileRequest = {
+	id: string,
+	label: string,
+	baseUrl: string,
+	defaultModel: string,
+	enabledModels: string[],
+	storeResponses: boolean,
+	capabilities: ProviderCapabilitiesDto,
 };
 
 export type UpdateSettingsRequest = {

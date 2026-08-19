@@ -1,32 +1,49 @@
 <script setup lang="ts">
-import { FolderOpen, KeyRound, RefreshCw } from "lucide-vue-next";
-import { ref } from "vue";
+import { FolderOpen, Plus, RefreshCw } from "lucide-vue-next";
+import { ref, watch } from "vue";
 
-import type { CredentialStatusDto, ProviderProfilesDto } from "../../bindings";
+import type {
+  CreateProviderProfileRequest,
+  CredentialStatusDto,
+  ProviderProfilesDto,
+  UpdateProviderProfileRequest,
+} from "../../bindings";
+import ProviderCreateForm from "./ProviderCreateForm.vue";
+import ProviderProfileEditor from "./ProviderProfileEditor.vue";
 
 const props = defineProps<{
   providers: ProviderProfilesDto;
   credentialStatuses: CredentialStatusDto[];
   reloading: boolean;
-  savingCredentialId: string | null;
+  busyProviderId: string | null;
 }>();
 const emit = defineEmits<{
   reload: [];
+  create: [request: CreateProviderProfileRequest];
+  update: [request: UpdateProviderProfileRequest];
+  delete: [providerId: string];
+  setDefault: [providerId: string];
+  syncModels: [providerId: string];
   saveCredential: [providerId: string, secret: string];
   deleteCredential: [providerId: string];
 }>();
-const credentialInputs = ref<Record<string, string>>({});
+const creating = ref(false);
+const pendingCreateId = ref<string | null>(null);
 
-function configured(providerId: string) {
-  return props.credentialStatuses.find((status) => status.providerId === providerId)?.configured;
+function create(request: CreateProviderProfileRequest) {
+  pendingCreateId.value = request.id;
+  emit("create", request);
 }
 
-function save(providerId: string) {
-  const secret = credentialInputs.value[providerId]?.trim();
-  if (!secret) return;
-  emit("saveCredential", providerId, secret);
-  credentialInputs.value[providerId] = "";
-}
+watch(
+  () => props.providers.profiles,
+  (profiles) => {
+    if (pendingCreateId.value && profiles.some((profile) => profile.id === pendingCreateId.value)) {
+      pendingCreateId.value = null;
+      creating.value = false;
+    }
+  },
+);
 </script>
 
 <template>
@@ -34,80 +51,53 @@ function save(providerId: string) {
     <div class="section-heading">
       <div>
         <h2>Providers</h2>
-        <p>Model endpoints and secure credentials</p>
+        <p>Endpoints, model availability and secure credentials</p>
       </div>
-      <button
-        class="icon-button"
-        type="button"
-        title="Reload provider configuration"
-        aria-label="Reload provider configuration"
-        :disabled="reloading"
-        @click="emit('reload')"
-      >
-        <RefreshCw :size="15" aria-hidden="true" />
-      </button>
+      <div class="section-actions">
+        <button
+          class="icon-button"
+          type="button"
+          title="Add provider"
+          aria-label="Add provider"
+          @click="creating = true"
+        >
+          <Plus :size="15" />
+        </button>
+        <button
+          class="icon-button"
+          type="button"
+          title="Reload provider configuration"
+          aria-label="Reload provider configuration"
+          :disabled="reloading"
+          @click="emit('reload')"
+        >
+          <RefreshCw :size="15" aria-hidden="true" />
+        </button>
+      </div>
     </div>
     <div class="path-row">
       <FolderOpen :size="15" /><code>{{ providers.configPath }}</code>
     </div>
-    <article v-for="provider in providers.profiles" :key="provider.id" class="provider-panel">
-      <div class="provider-title">
-        <div>
-          <h3>{{ provider.label }}</h3>
-          <code>{{ provider.id }}</code>
-        </div>
-        <span class="status-dot" :class="{ active: configured(provider.id) }">{{
-          configured(provider.id) ? "Credential saved" : "Credential missing"
-        }}</span>
-      </div>
-      <dl class="provider-details">
-        <div>
-          <dt>Protocol</dt>
-          <dd>{{ provider.protocol }}</dd>
-        </div>
-        <div>
-          <dt>Default model</dt>
-          <dd>{{ provider.defaultModel }}</dd>
-        </div>
-        <div class="wide">
-          <dt>Base URL</dt>
-          <dd>{{ provider.baseUrl }}</dd>
-        </div>
-        <div>
-          <dt>Remote store</dt>
-          <dd>{{ provider.storeResponses ? "Enabled" : "Disabled" }}</dd>
-        </div>
-        <div>
-          <dt>Inputs</dt>
-          <dd>{{ provider.capabilities.images ? "Text + images" : "Text" }}</dd>
-        </div>
-      </dl>
-      <form class="credential-form" @submit.prevent="save(provider.id)">
-        <KeyRound :size="15" aria-hidden="true" />
-        <input
-          v-model="credentialInputs[provider.id]"
-          type="password"
-          autocomplete="new-password"
-          :placeholder="configured(provider.id) ? 'Replace API key' : 'API key'"
-          :aria-label="`${provider.label} API key`"
-        />
-        <button
-          class="primary-button"
-          type="submit"
-          :disabled="!credentialInputs[provider.id]?.trim() || savingCredentialId === provider.id"
-        >
-          Save
-        </button>
-        <button
-          v-if="configured(provider.id)"
-          class="text-button danger-text"
-          type="button"
-          :disabled="savingCredentialId === provider.id"
-          @click="emit('deleteCredential', provider.id)"
-        >
-          Remove
-        </button>
-      </form>
-    </article>
+    <ProviderCreateForm
+      v-if="creating"
+      :busy="busyProviderId === 'new'"
+      @create="create"
+      @cancel="creating = false"
+    />
+    <ProviderProfileEditor
+      v-for="provider in providers.profiles"
+      :key="provider.id"
+      :provider="provider"
+      :is-default="providers.defaultProviderId === provider.id"
+      :credential-status="credentialStatuses.find((item) => item.providerId === provider.id)"
+      :busy="busyProviderId === provider.id"
+      :can-delete="providers.profiles.length > 1"
+      @save="emit('update', $event)"
+      @delete="emit('delete', $event)"
+      @set-default="emit('setDefault', $event)"
+      @sync-models="emit('syncModels', $event)"
+      @save-credential="(providerId, secret) => emit('saveCredential', providerId, secret)"
+      @delete-credential="emit('deleteCredential', $event)"
+    />
   </section>
 </template>

@@ -10,14 +10,16 @@ use crate::agent::cancellation::CancellationTree;
 use crate::credentials::{CredentialStore, SystemCredentialStore};
 use crate::domain::attachment::AttachmentDescriptor;
 use crate::domain::conversation::{Conversation, ConversationChanges, NewConversation};
-use crate::domain::provider::ProviderProfile;
+use crate::domain::provider::{
+    NewProviderProfile, ProviderCatalog, ProviderProfile, ProviderProfileChanges,
+};
 use crate::domain::settings::AppSettings;
 use crate::domain::storage::ConversationStore;
 use crate::error::AppError;
 use crate::persistence::{Database, SqliteAttachmentStore, SqliteConversationStore};
-use crate::providers::ProviderConfigLoader;
 use crate::providers::runtime::{ImageDetail, MessageContent, MessageRole, ProviderMessage};
 use crate::providers::{LlmProvider, OpenAiResponsesProvider, ProviderEvent, ProviderRequest};
+use crate::providers::{OpenAiModelCatalog, ProviderConfigLoader};
 use crate::settings::SettingsStore;
 
 pub struct CarrotService {
@@ -25,7 +27,7 @@ pub struct CarrotService {
     attachments: SqliteAttachmentStore,
     credentials: Arc<dyn CredentialStore>,
     provider_loader: ProviderConfigLoader,
-    providers: RwLock<Vec<ProviderProfile>>,
+    providers: RwLock<ProviderCatalog>,
     settings: SettingsStore,
     database_path: PathBuf,
     attachment_path: PathBuf,
@@ -85,12 +87,17 @@ impl CarrotService {
         let providers = self.providers.read().await;
         let profile = match provider_profile_id {
             Some(id) => providers
+                .profiles
                 .iter()
                 .find(|profile| profile.id == id)
                 .ok_or_else(|| AppError::not_found("provider profile", &id))?,
-            None => providers.first().ok_or_else(|| AppError::Configuration {
-                message: "no provider profiles are configured".to_owned(),
-            })?,
+            None => providers
+                .profiles
+                .iter()
+                .find(|profile| profile.id == providers.default_provider_id)
+                .ok_or_else(|| AppError::Configuration {
+                    message: "the default provider profile is unavailable".to_owned(),
+                })?,
         };
         let model = validate_model(model.unwrap_or_else(|| profile.default_model.clone()))?;
         let input = NewConversation {
@@ -120,7 +127,11 @@ impl CarrotService {
         let model = changes.default_model.map(validate_model).transpose()?;
         if let Some(provider_id) = changes.default_provider_profile_id.as_deref() {
             let providers = self.providers.read().await;
-            if !providers.iter().any(|profile| profile.id == provider_id) {
+            if !providers
+                .profiles
+                .iter()
+                .any(|profile| profile.id == provider_id)
+            {
                 return Err(AppError::not_found("provider profile", provider_id));
             }
         }
@@ -162,13 +173,160 @@ impl CarrotService {
     }
 
     pub async fn provider_profiles(&self) -> Vec<ProviderProfile> {
+        self.providers.read().await.profiles.clone()
+    }
+
+    pub async fn provider_catalog(&self) -> ProviderCatalog {
         self.providers.read().await.clone()
     }
 
-    pub async fn reload_provider_profiles(&self) -> Result<Vec<ProviderProfile>, AppError> {
-        let profiles = self.provider_loader.load().await.map_err(AppError::from)?;
-        *self.providers.write().await = profiles.clone();
-        Ok(profiles)
+    pub async fn reload_provider_profiles(&self) -> Result<ProviderCatalog, AppError> {
+        let catalog = self.provider_loader.load().await.map_err(AppError::from)?;
+        *self.providers.write().await = catalog.clone();
+        Ok(catalog)
+    }
+
+    pub async fn create_provider_profile(
+        &self,
+        input: NewProviderProfile,
+    ) -> Result<ProviderCatalog, AppError> {
+        let mut guard = self.providers.write().await;
+        if guard.profiles.iter().any(|profile| profile.id == input.id) {
+            return Err(AppError::invalid_input(format!(
+                "provider profile '{}' already exists",
+                input.id
+            )));
+        }
+        guard.profiles.push(ProviderProfile {
+            credential_ref: format!("{}-api-key", input.id),
+            id: input.id,
+            label: input.label,
+            kind: input.kind,
+            protocol: input.protocol,
+            base_url: input.base_url,
+            available_models: vec![input.default_model.clone()],
+            enabled_models: vec![input.default_model.clone()],
+            default_model: input.default_model,
+            models_synced_at_ms: None,
+            store_responses: input.store_responses,
+            capabilities: input.capabilities,
+        });
+        let saved = self.provider_loader.save(&guard).await?;
+        *guard = saved.clone();
+        Ok(saved)
+    }
+
+    pub async fn update_provider_profile(
+        &self,
+        changes: ProviderProfileChanges,
+    ) -> Result<ProviderCatalog, AppError> {
+        if changes.enabled_models.is_empty() {
+            return Err(AppError::invalid_input(
+                "at least one model must be enabled",
+            ));
+        }
+        if !changes.enabled_models.contains(&changes.default_model) {
+            return Err(AppError::invalid_input("the default model must be enabled"));
+        }
+        let mut guard = self.providers.write().await;
+        let profile = guard
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == changes.id)
+            .ok_or_else(|| AppError::not_found("provider profile", &changes.id))?;
+        profile.label = changes.label;
+        profile.base_url = changes.base_url;
+        profile.default_model = changes.default_model;
+        profile.enabled_models = changes.enabled_models;
+        profile.store_responses = changes.store_responses;
+        profile.capabilities = changes.capabilities;
+        let saved = self.provider_loader.save(&guard).await?;
+        *guard = saved.clone();
+        Ok(saved)
+    }
+
+    pub async fn delete_provider_profile(&self, id: &str) -> Result<ProviderCatalog, AppError> {
+        let mut guard = self.providers.write().await;
+        if guard.profiles.len() == 1 {
+            return Err(AppError::invalid_input("at least one provider is required"));
+        }
+        if !guard.profiles.iter().any(|profile| profile.id == id) {
+            return Err(AppError::not_found("provider profile", id));
+        }
+        if self
+            .conversations
+            .list()
+            .await?
+            .iter()
+            .any(|conversation| conversation.default_provider_profile_id == id)
+        {
+            return Err(AppError::invalid_input(
+                "provider is used by an existing conversation",
+            ));
+        }
+        guard.profiles.retain(|profile| profile.id != id);
+        if guard.default_provider_id == id {
+            guard.default_provider_id = guard.profiles[0].id.clone();
+        }
+        let saved = self.provider_loader.save(&guard).await?;
+        *guard = saved.clone();
+        Ok(saved)
+    }
+
+    pub async fn set_default_provider(&self, id: &str) -> Result<ProviderCatalog, AppError> {
+        let mut guard = self.providers.write().await;
+        if !guard.profiles.iter().any(|profile| profile.id == id) {
+            return Err(AppError::not_found("provider profile", id));
+        }
+        guard.default_provider_id = id.to_owned();
+        let saved = self.provider_loader.save(&guard).await?;
+        *guard = saved.clone();
+        Ok(saved)
+    }
+
+    pub async fn sync_provider_models(&self, id: &str) -> Result<ProviderCatalog, AppError> {
+        let profile = self
+            .providers
+            .read()
+            .await
+            .profiles
+            .iter()
+            .find(|profile| profile.id == id)
+            .cloned()
+            .ok_or_else(|| AppError::not_found("provider profile", id))?;
+        let api_key = match self.credential(id).await {
+            Ok(secret) => secret,
+            Err(_) if is_loopback_base_url(&profile.base_url) => "local-provider".to_owned(),
+            Err(error) => return Err(error),
+        };
+        let timeout = std::time::Duration::from_secs(u64::from(
+            self.settings().await.request_timeout_seconds,
+        ));
+        let models = tokio::time::timeout(
+            timeout,
+            OpenAiModelCatalog::new(api_key, profile.base_url).list(),
+        )
+        .await
+        .map_err(|_| AppError::Configuration {
+            message: "model synchronization timed out".to_owned(),
+        })??;
+        if models.is_empty() {
+            return Err(AppError::Configuration {
+                message: "provider returned an empty model catalog".to_owned(),
+            });
+        }
+
+        let mut guard = self.providers.write().await;
+        let profile = guard
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == id)
+            .ok_or_else(|| AppError::not_found("provider profile", id))?;
+        profile.available_models = models;
+        profile.models_synced_at_ms = Some(crate::persistence::now_ms()?);
+        let saved = self.provider_loader.save(&guard).await?;
+        *guard = saved.clone();
+        Ok(saved)
     }
 
     pub fn provider_config_path(&self) -> String {
@@ -336,6 +494,7 @@ impl CarrotService {
             .providers
             .read()
             .await
+            .profiles
             .iter()
             .find(|profile| profile.id == conversation.default_provider_profile_id)
             .cloned()
@@ -464,6 +623,7 @@ impl CarrotService {
         self.providers
             .read()
             .await
+            .profiles
             .iter()
             .find(|profile| profile.id == provider_id)
             .map(|profile| profile.credential_ref.clone())
@@ -504,6 +664,16 @@ fn validate_model(model: String) -> Result<String, AppError> {
     Ok(model)
 }
 
+fn is_loopback_base_url(base_url: &str) -> bool {
+    url::Url::parse(base_url).is_ok_and(|url| {
+        url.host_str() == Some("localhost")
+            || url.host().is_some_and(|host| {
+                matches!(host, url::Host::Ipv4(ip) if ip.is_loopback())
+                    || matches!(host, url::Host::Ipv6(ip) if ip.is_loopback())
+            })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -532,6 +702,57 @@ mod tests {
             .expect("conversation should be created");
         assert_eq!(conversation.default_provider_profile_id, "openai");
         assert_eq!(service.list_conversations().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn persists_provider_defaults_updates_and_deletion() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let provider_path = temp.path().join("providers.toml");
+        let service = CarrotService::initialize(
+            temp.path().join("carrot.sqlite3"),
+            provider_path,
+            temp.path().join("settings.toml"),
+            temp.path().join("attachments"),
+        )
+        .await
+        .unwrap();
+
+        service
+            .set_default_provider("local-compatible")
+            .await
+            .unwrap();
+        let local = service
+            .provider_profiles()
+            .await
+            .into_iter()
+            .find(|profile| profile.id == "local-compatible")
+            .unwrap();
+        service
+            .update_provider_profile(crate::domain::provider::ProviderProfileChanges {
+                id: local.id,
+                label: "Local renamed".to_owned(),
+                base_url: local.base_url,
+                default_model: "local-vision".to_owned(),
+                enabled_models: vec!["local-model".to_owned(), "local-vision".to_owned()],
+                store_responses: local.store_responses,
+                capabilities: local.capabilities,
+            })
+            .await
+            .unwrap();
+        service.delete_provider_profile("openai").await.unwrap();
+        service.reload_provider_profiles().await.unwrap();
+
+        let catalog = service.provider_catalog().await;
+        assert_eq!(catalog.default_provider_id, "local-compatible");
+        assert_eq!(catalog.profiles.len(), 1);
+        assert_eq!(catalog.profiles[0].label, "Local renamed");
+        assert_eq!(catalog.profiles[0].default_model, "local-vision");
+        let conversation = service
+            .create_conversation("Uses default".to_owned(), None, None)
+            .await
+            .unwrap();
+        assert_eq!(conversation.default_provider_profile_id, "local-compatible");
+        assert_eq!(conversation.default_model, "local-vision");
     }
 
     #[tokio::test(flavor = "multi_thread")]

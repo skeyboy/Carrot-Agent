@@ -3,35 +3,47 @@ import type {
   AppError,
   ConversationDto,
   CreateConversationRequest,
+  CreateProviderProfileRequest,
   DeleteConversationRequest,
   ProviderProfileDto,
   ProviderProfilesDto,
+  UpdateProviderProfileRequest,
   UpdateConversationRequest,
 } from "../bindings";
 
-const previewProviders: ProviderProfileDto[] = [
-  {
-    id: "openai",
-    label: "OpenAI",
-    kind: "openai_responses",
-    protocol: "responses",
-    baseUrl: "https://api.openai.com/v1",
-    defaultModel: "gpt-5.6",
-    storeResponses: true,
-    capabilities: { tools: true, images: true, files: true },
-  },
-  {
-    id: "local-compatible",
-    label: "Local compatible",
-    kind: "openai_compatible",
-    protocol: "chat_completions",
-    baseUrl: "http://127.0.0.1:11434/v1",
-    defaultModel: "local-model",
-    storeResponses: true,
-    capabilities: { tools: true, images: true, files: false },
-  },
-];
+function initialPreviewProviders(): ProviderProfileDto[] {
+  return [
+    {
+      id: "openai",
+      label: "OpenAI",
+      kind: "openai_responses",
+      protocol: "responses",
+      baseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-5.6",
+      availableModels: ["gpt-5.6", "gpt-5.6-terra", "gpt-5.6-luna"],
+      enabledModels: ["gpt-5.6", "gpt-5.6-terra"],
+      modelsSyncedAtMs: Date.now().toString(),
+      storeResponses: true,
+      capabilities: { tools: true, images: true, files: true },
+    },
+    {
+      id: "local-compatible",
+      label: "Local compatible",
+      kind: "openai_compatible",
+      protocol: "chat_completions",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      defaultModel: "local-model",
+      availableModels: ["local-model", "local-vision"],
+      enabledModels: ["local-model"],
+      modelsSyncedAtMs: null,
+      storeResponses: true,
+      capabilities: { tools: true, images: true, files: false },
+    },
+  ];
+}
 
+let previewProviders = initialPreviewProviders();
+let previewDefaultProviderId = "openai";
 let previewConversations: ConversationDto[] = [];
 
 function isTauri() {
@@ -103,15 +115,70 @@ export async function deleteConversation(request: DeleteConversationRequest): Pr
 }
 
 export async function listProviderProfiles(): Promise<ProviderProfilesDto> {
-  if (!isTauri()) return { configPath: "browser preview", profiles: previewProviders };
+  if (!isTauri())
+    return {
+      configPath: "browser preview",
+      defaultProviderId: previewDefaultProviderId,
+      profiles: structuredClone(previewProviders),
+    };
   return resultData(await commands.providerProfileList());
 }
 
 export async function reloadProviderProfiles(): Promise<ProviderProfilesDto> {
-  if (!isTauri()) return { configPath: "browser preview", profiles: previewProviders };
+  if (!isTauri()) return listProviderProfiles();
   return resultData(await commands.providerProfileReload());
+}
+
+export async function createProviderProfile(
+  request: CreateProviderProfileRequest,
+): Promise<ProviderProfilesDto> {
+  if (isTauri()) return resultData(await commands.providerProfileCreate(request));
+  previewProviders.push({
+    ...request,
+    kind: request.kind,
+    protocol: request.protocol,
+    availableModels: [request.defaultModel],
+    enabledModels: [request.defaultModel],
+    modelsSyncedAtMs: null,
+  });
+  return listProviderProfiles();
+}
+
+export async function updateProviderProfile(
+  request: UpdateProviderProfileRequest,
+): Promise<ProviderProfilesDto> {
+  if (isTauri()) return resultData(await commands.providerProfileUpdate(request));
+  previewProviders = previewProviders.map((provider) =>
+    provider.id === request.id ? { ...provider, ...request } : provider,
+  );
+  return listProviderProfiles();
+}
+
+export async function deleteProviderProfile(providerId: string): Promise<ProviderProfilesDto> {
+  if (isTauri()) return resultData(await commands.providerProfileDelete(providerId));
+  previewProviders = previewProviders.filter((provider) => provider.id !== providerId);
+  if (previewDefaultProviderId === providerId) previewDefaultProviderId = previewProviders[0]!.id;
+  return listProviderProfiles();
+}
+
+export async function setDefaultProvider(providerId: string): Promise<ProviderProfilesDto> {
+  if (isTauri()) return resultData(await commands.providerProfileSetDefault(providerId));
+  previewDefaultProviderId = providerId;
+  return listProviderProfiles();
+}
+
+export async function syncProviderModels(providerId: string): Promise<ProviderProfilesDto> {
+  if (isTauri()) return resultData(await commands.providerModelSync(providerId));
+  previewProviders = previewProviders.map((provider) =>
+    provider.id === providerId
+      ? { ...provider, modelsSyncedAtMs: Date.now().toString() }
+      : provider,
+  );
+  return listProviderProfiles();
 }
 
 export function resetWorkspacePreview() {
   previewConversations = [];
+  previewProviders = initialPreviewProviders();
+  previewDefaultProviderId = "openai";
 }

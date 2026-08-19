@@ -1,10 +1,10 @@
 # Carrot LLM 客户端设计与实施规划
 
-> 版本：v6
+> 版本：v7
 >
 > 更新日期：2026-08-19
 >
-> 当前阶段：P2 核心已完成，下一阶段 P3
+> 当前阶段：P2 与 Provider 管理补充已完成，下一阶段 P3
 
 ## 1. 产品目标与确认边界
 
@@ -112,6 +112,8 @@ Provider 领域请求包含模型、instructions、规范化 input items、附�
 - 后续增加 capability overrides、额外 headers 和超时。
 
 配置加载必须验证 HTTPS 策略、URL、重复 ID 和未知字段。Loopback HTTP 可用于本地兼容服务；远程明文 HTTP 默认拒绝。兼容 Provider 必须通过能力协商或显式配置区分 Responses 与 Chat Completions，不假设所有 `/v1` 服务都支持相同协议。
+
+P2 补充将配置升级为版本化 Provider Catalog，持久化默认 Provider、远端模型目录、启用模型和默认模型。模型目录通过 OpenAI-compatible `GET /models` 同步，但不根据名称推断对话能力。所有修改经 Rust 校验后原子写回本地文件，应用启动重新加载。完整结论见 [Phase 2 Provider 管理补充报告](phase-2-provider-management.md)。
 
 API Key 不允许写入配置文件，配置只保存 OS credential reference。
 

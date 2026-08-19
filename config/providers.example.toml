@@ -1,6 +1,9 @@
 # The application copies this template to its config directory during Phase 1.
 # Credentials are referenced by key and remain in the OS credential store.
 
+version = 2
+default_provider_id = "openai"
+
 [[providers]]
 id = "openai"
 label = "OpenAI"
@@ -8,6 +11,8 @@ kind = "openai_responses"
 protocol = "responses"
 base_url = "https://api.openai.com/v1"
 default_model = "gpt-5.6"
+available_models = ["gpt-5.6"]
+enabled_models = ["gpt-5.6"]
 credential_ref = "openai-api-key"
 store_responses = true
 supports_tools = true
@@ -21,6 +26,8 @@ kind = "openai_compatible"
 protocol = "chat_completions"
 base_url = "http://127.0.0.1:11434/v1"
 default_model = "replace-with-model-id"
+available_models = ["replace-with-model-id"]
+enabled_models = ["replace-with-model-id"]
 credential_ref = "local-compatible-api-key"
 store_responses = true
 supports_tools = true

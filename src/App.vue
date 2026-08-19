@@ -4,11 +4,16 @@ import { computed, onMounted, ref } from "vue";
 
 import {
   createConversation,
+  createProviderProfile,
   deleteConversation,
+  deleteProviderProfile,
   listConversations,
   listProviderProfiles,
   reloadProviderProfiles,
+  setDefaultProvider,
+  syncProviderModels,
   updateConversation,
+  updateProviderProfile,
 } from "./api/workspace";
 import {
   deleteCredential,
@@ -24,15 +29,17 @@ import type { SettingsSection } from "./components/settings/SettingsPage.vue";
 import ConversationThread from "./components/chat/ConversationThread.vue";
 import type {
   ConversationDto,
+  CreateProviderProfileRequest,
   CredentialStatusDto,
   HealthStatus,
   ProviderProfilesDto,
   SettingsSnapshotDto,
+  UpdateProviderProfileRequest,
 } from "./bindings";
 
 type AppView = "workspace" | "settings";
 const conversations = ref<ConversationDto[]>([]);
-const providers = ref<ProviderProfilesDto>({ configPath: "", profiles: [] });
+const providers = ref<ProviderProfilesDto>({ configPath: "", defaultProviderId: "", profiles: [] });
 const settingsSnapshot = ref<SettingsSnapshotDto | null>(null);
 const credentialStatuses = ref<CredentialStatusDto[]>([]);
 const health = ref<HealthStatus | null>(null);
@@ -48,7 +55,7 @@ const newProviderId = ref("");
 const editingId = ref<string | null>(null);
 const editingTitle = ref("");
 const isSavingSettings = ref(false);
-const savingCredentialId = ref<string | null>(null);
+const busyProviderId = ref<string | null>(null);
 
 const selectedConversation = computed(
   () => conversations.value.find((conversation) => conversation.id === selectedId.value) ?? null,
@@ -76,7 +83,7 @@ async function loadWorkspace() {
     settingsSnapshot.value = settingsValue;
     credentialStatuses.value = statuses;
     health.value = healthValue;
-    newProviderId.value = providerItems.profiles[0]?.id ?? "";
+    newProviderId.value = providerItems.defaultProviderId;
     selectedId.value = conversationItems[0]?.id ?? null;
   } catch (cause) {
     error.value = errorMessage(cause);
@@ -108,7 +115,7 @@ async function saveSettings(settings: import("./bindings").AppSettings) {
 
 async function saveCredential(providerId: string, secret: string) {
   if (!secret) return;
-  savingCredentialId.value = providerId;
+  busyProviderId.value = providerId;
   error.value = null;
   try {
     const status = await setCredential(providerId, secret);
@@ -118,12 +125,12 @@ async function saveCredential(providerId: string, secret: string) {
   } catch (cause) {
     error.value = errorMessage(cause);
   } finally {
-    savingCredentialId.value = null;
+    busyProviderId.value = null;
   }
 }
 
 async function removeCredential(providerId: string) {
-  savingCredentialId.value = providerId;
+  busyProviderId.value = providerId;
   error.value = null;
   try {
     const status = await deleteCredential(providerId);
@@ -133,7 +140,7 @@ async function removeCredential(providerId: string) {
   } catch (cause) {
     error.value = errorMessage(cause);
   } finally {
-    savingCredentialId.value = null;
+    busyProviderId.value = null;
   }
 }
 
@@ -199,6 +206,7 @@ async function reloadProviders() {
   error.value = null;
   try {
     providers.value = await reloadProviderProfiles();
+    credentialStatuses.value = await listCredentialStatuses();
     if (!providers.value.profiles.some((profile) => profile.id === newProviderId.value)) {
       newProviderId.value = providers.value.profiles[0]?.id ?? "";
     }
@@ -206,6 +214,62 @@ async function reloadProviders() {
     error.value = errorMessage(cause);
   } finally {
     isReloadingProviders.value = false;
+  }
+}
+
+async function createProvider(request: CreateProviderProfileRequest) {
+  busyProviderId.value = "new";
+  error.value = null;
+  try {
+    providers.value = await createProviderProfile(request);
+    credentialStatuses.value.push({ providerId: request.id, configured: false });
+  } catch (cause) {
+    error.value = errorMessage(cause);
+  } finally {
+    busyProviderId.value = null;
+  }
+}
+
+async function updateProvider(request: UpdateProviderProfileRequest) {
+  await runProviderAction(request.id, () => updateProviderProfile(request));
+}
+
+async function removeProvider(providerId: string) {
+  const changed = await runProviderAction(providerId, () => deleteProviderProfile(providerId));
+  if (changed) {
+    credentialStatuses.value = credentialStatuses.value.filter(
+      (status) => status.providerId !== providerId,
+    );
+  }
+}
+
+async function makeDefaultProvider(providerId: string) {
+  if (await runProviderAction(providerId, () => setDefaultProvider(providerId))) {
+    newProviderId.value = providerId;
+  }
+}
+
+async function synchronizeProviderModels(providerId: string) {
+  await runProviderAction(providerId, () => syncProviderModels(providerId));
+}
+
+async function runProviderAction(
+  providerId: string,
+  action: () => Promise<ProviderProfilesDto>,
+): Promise<boolean> {
+  busyProviderId.value = providerId;
+  error.value = null;
+  try {
+    providers.value = await action();
+    if (!providers.value.profiles.some((profile) => profile.id === newProviderId.value)) {
+      newProviderId.value = providers.value.defaultProviderId;
+    }
+    return true;
+  } catch (cause) {
+    error.value = errorMessage(cause);
+    return false;
+  } finally {
+    busyProviderId.value = null;
   }
 }
 
@@ -330,11 +394,7 @@ onMounted(loadWorkspace);
         </article>
       </nav>
 
-      <SidebarSettingsNav
-        :provider-count="providers.profiles.length"
-        :active="appView === 'settings'"
-        @open="openSettings"
-      />
+      <SidebarSettingsNav :active="appView === 'settings'" @open="openSettings('providers')" />
     </aside>
 
     <main class="conversation-pane">
@@ -359,8 +419,13 @@ onMounted(loadWorkspace);
         :health="health"
         :reloading-providers="isReloadingProviders"
         :saving-settings="isSavingSettings"
-        :saving-credential-id="savingCredentialId"
+        :busy-provider-id="busyProviderId"
         @reload-providers="reloadProviders"
+        @create-provider="createProvider"
+        @update-provider="updateProvider"
+        @delete-provider="removeProvider"
+        @set-default-provider="makeDefaultProvider"
+        @sync-provider-models="synchronizeProviderModels"
         @save-settings="saveSettings"
         @save-credential="saveCredential"
         @delete-credential="removeCredential"
