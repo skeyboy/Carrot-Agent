@@ -4,6 +4,7 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 
 import {
   cancelChat,
+  getChatSnapshot,
   listAttachments,
   pickAttachment,
   removeAttachment,
@@ -11,7 +12,8 @@ import {
   subscribeToChatEvents,
 } from "../../api/chat";
 import type { ChatEvent } from "../../api/chat";
-import type { AttachmentDto, ConversationDto } from "../../bindings";
+import type { ActiveRunDto, AttachmentDto, ChatSnapshotDto, ConversationDto } from "../../bindings";
+import AgentRunStatus from "./AgentRunStatus.vue";
 import ChatComposer from "./ChatComposer.vue";
 
 interface DisplayMessage {
@@ -26,15 +28,26 @@ const messages = ref<DisplayMessage[]>([]);
 const attachments = ref<AttachmentDto[]>([]);
 const selectedAttachments = ref<AttachmentDto[]>([]);
 const activeRunId = ref<string | null>(null);
+const activeRun = ref<ActiveRunDto | null>(null);
+const toolCount = ref(0);
 const starting = ref(false);
 const attaching = ref(false);
 let unlisten: (() => void) | undefined;
 let bufferedEvents: ChatEvent[] = [];
+let hydrating = true;
 
 onMounted(async () => {
   try {
-    attachments.value = await listAttachments(props.conversation.id);
     unlisten = await subscribeToChatEvents(handleEvent);
+    const [availableAttachments, snapshot] = await Promise.all([
+      listAttachments(props.conversation.id),
+      getChatSnapshot(props.conversation.id),
+    ]);
+    attachments.value = availableAttachments;
+    applySnapshot(snapshot);
+    hydrating = false;
+    bufferedEvents.forEach((event) => handleEvent(event));
+    bufferedEvents = [];
   } catch (cause) {
     emit("error", errorMessage(cause));
   }
@@ -79,6 +92,12 @@ async function send(text: string) {
       attachmentIds: selectedAttachments.value.map((item) => item.id),
     });
     activeRunId.value = started.runId;
+    activeRun.value = {
+      id: started.runId,
+      status: "running",
+      phase: "routing",
+      lastEventSeq: "0",
+    };
     selectedAttachments.value = [];
     bufferedEvents
       .filter((event) => event.runId === started.runId)
@@ -94,6 +113,10 @@ async function send(text: string) {
 
 function handleEvent(payload: ChatEvent) {
   if (payload.conversationId !== props.conversation.id) return;
+  if (hydrating) {
+    bufferedEvents.push(payload);
+    return;
+  }
   if (payload.runId !== activeRunId.value) {
     if (starting.value) bufferedEvents.push(payload);
     return;
@@ -103,10 +126,14 @@ function handleEvent(payload: ChatEvent) {
 
 function applyEvent(payload: ChatEvent) {
   const event = payload.event;
-  if (event.type === "text_delta") {
+  if (event.type === "started") {
+    if (activeRun.value) activeRun.value.phase = "model_stream";
+  } else if (event.type === "text_delta") {
     const assistant = [...messages.value].reverse().find((message) => message.role === "assistant");
     if (assistant) assistant.text += event.delta;
   } else if (event.type === "tool_call") {
+    if (activeRun.value) activeRun.value.phase = "tool_execute";
+    toolCount.value += 1;
     messages.value.push({
       id: crypto.randomUUID(),
       role: "tool",
@@ -114,10 +141,73 @@ function applyEvent(payload: ChatEvent) {
     });
   } else if (event.type === "failed") {
     activeRunId.value = null;
+    activeRun.value = null;
     emit("error", event.message);
+    void refreshSnapshot();
   } else if (event.type === "completed" || event.type === "cancelled") {
     activeRunId.value = null;
+    activeRun.value = null;
+    void refreshSnapshot();
   }
+}
+
+async function refreshSnapshot() {
+  try {
+    applySnapshot(await getChatSnapshot(props.conversation.id));
+  } catch (cause) {
+    emit("error", errorMessage(cause));
+  }
+}
+
+function applySnapshot(snapshot: ChatSnapshotDto) {
+  messages.value = snapshot.items.flatMap((item): DisplayMessage[] => {
+    if (item.kind === "message") {
+      const content = parseJson(item.contentJson);
+      const text = messageText(content);
+      if ((item.role === "user" || item.role === "assistant") && text) {
+        return [{ id: item.id, role: item.role, text }];
+      }
+    }
+    if (item.kind === "function_call") {
+      const content = parseJson(item.contentJson) as { name?: string; arguments?: unknown };
+      return [
+        {
+          id: item.id,
+          role: "tool",
+          text: `${content.name ?? "tool"} · ${JSON.stringify(content.arguments ?? {})}`,
+        },
+      ];
+    }
+    return [];
+  });
+  activeRun.value = snapshot.activeRun;
+  activeRunId.value = snapshot.activeRun?.id ?? null;
+  toolCount.value = snapshot.toolExecutions.length;
+}
+
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function messageText(value: unknown): string {
+  if (!value || typeof value !== "object" || !("content" in value)) return "";
+  const content = (value as { content?: unknown }).content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        !!part &&
+        typeof part === "object" &&
+        "type" in part &&
+        part.type === "text" &&
+        "text" in part,
+    )
+    .map((part) => part.text)
+    .join("\n");
 }
 
 async function cancel() {
@@ -136,6 +226,7 @@ function errorMessage(cause: unknown) {
 
 <template>
   <section class="thread-shell">
+    <AgentRunStatus :run="activeRun" :tool-count="toolCount" />
     <div v-if="messages.length === 0" class="empty-thread">
       <MessageSquare :size="24" />
       <h2>No messages yet</h2>

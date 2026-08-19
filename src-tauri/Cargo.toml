@@ -26,7 +26,7 @@ diesel = { version = "2.3", features = ["sqlite"] }
 diesel-async = { version = "0.9", features = ["deadpool", "migrations", "sqlite"] }
 diesel_migrations = "2.3"
 libsqlite3-sys = { version = "0.38", features = ["bundled"] }
-openai-oxide = { version = "0.16", default-features = false, features = ["models", "responses"] }
+openai-oxide = { version = "0.16", default-features = false, features = ["chat", "models", "responses"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2.7"
 serde = { version = "1", features = ["derive"] }

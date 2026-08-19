@@ -8,10 +8,27 @@ use tokio_util::sync::CancellationToken;
 #[serde(rename_all = "camelCase")]
 pub struct ProviderRequest {
     pub model: String,
-    pub messages: Vec<ProviderMessage>,
+    pub input: Vec<ProviderInputItem>,
     pub tools: Vec<ToolDefinition>,
     pub previous_response_id: Option<String>,
     pub store: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProviderInputItem {
+    Message {
+        message: ProviderMessage,
+    },
+    ToolCall {
+        call_id: String,
+        name: String,
+        arguments: serde_json::Value,
+    },
+    ToolOutput {
+        call_id: String,
+        output: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]

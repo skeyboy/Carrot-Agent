@@ -2,9 +2,318 @@ use diesel::{AsChangeset, Insertable, Queryable, Selectable};
 
 use crate::domain::attachment::AttachmentDescriptor;
 use crate::domain::conversation::Conversation;
+use crate::domain::provider::ProviderProfile;
+use crate::domain::run::{AgentRun, RunEvent, RunItem, RunPhase, RunStatus, ToolExecution};
+use crate::domain::settings::RunStrategy;
 use crate::domain::storage::StoreError;
 
-use super::schema::{attachments, conversations};
+use super::schema::{
+    attachments, conversations, items, plan_steps, plans, run_events, run_snapshots, runs,
+    tool_executions,
+};
+
+#[derive(Debug, Queryable, Selectable)]
+#[diesel(table_name = runs)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct RunRow {
+    pub id: String,
+    pub conversation_id: String,
+    pub parent_run_id: Option<String>,
+    pub status: String,
+    pub phase: String,
+    pub strategy: String,
+    pub provider_profile_id: String,
+    pub provider_snapshot_json: String,
+    pub model: String,
+    pub version: i64,
+    pub last_event_seq: i64,
+    pub runtime_instance_id: Option<String>,
+    pub lease_expires_at_ms: Option<i64>,
+    pub stop_reason: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
+}
+
+impl TryFrom<RunRow> for AgentRun {
+    type Error = StoreError;
+
+    fn try_from(row: RunRow) -> Result<Self, Self::Error> {
+        let status = RunStatus::parse(&row.status).ok_or_else(|| StoreError::InvalidData {
+            message: format!("run {} has invalid status", row.id),
+        })?;
+        let phase = RunPhase::parse(&row.phase).ok_or_else(|| StoreError::InvalidData {
+            message: format!("run {} has invalid phase", row.id),
+        })?;
+        let strategy =
+            RunStrategy::parse(&row.strategy).ok_or_else(|| StoreError::InvalidData {
+                message: format!("run {} has invalid strategy", row.id),
+            })?;
+        let provider_snapshot = serde_json::from_str::<ProviderProfile>(
+            &row.provider_snapshot_json,
+        )
+        .map_err(|error| StoreError::InvalidData {
+            message: format!("run {} provider snapshot is invalid: {error}", row.id),
+        })?;
+        Ok(Self {
+            id: row.id,
+            conversation_id: row.conversation_id,
+            parent_run_id: row.parent_run_id,
+            status,
+            phase,
+            strategy,
+            provider_profile_id: row.provider_profile_id,
+            provider_snapshot,
+            model: row.model,
+            version: row.version,
+            last_event_seq: row.last_event_seq,
+            runtime_instance_id: row.runtime_instance_id,
+            lease_expires_at_ms: row.lease_expires_at_ms,
+            stop_reason: row.stop_reason,
+            created_at_ms: row.created_at_ms,
+            updated_at_ms: row.updated_at_ms,
+            completed_at_ms: row.completed_at_ms,
+        })
+    }
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = runs)]
+pub struct NewRunRow<'a> {
+    pub id: &'a str,
+    pub conversation_id: &'a str,
+    pub parent_run_id: Option<&'a str>,
+    pub status: &'a str,
+    pub phase: &'a str,
+    pub strategy: &'a str,
+    pub provider_profile_id: &'a str,
+    pub provider_snapshot_json: &'a str,
+    pub model: &'a str,
+    pub version: i64,
+    pub last_event_seq: i64,
+    pub runtime_instance_id: Option<&'a str>,
+    pub lease_expires_at_ms: Option<i64>,
+    pub stop_reason: Option<&'a str>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
+}
+
+#[derive(AsChangeset)]
+#[diesel(table_name = runs)]
+pub struct RunChangeset<'a> {
+    pub status: &'a str,
+    pub phase: &'a str,
+    pub version: i64,
+    pub last_event_seq: i64,
+    pub stop_reason: Option<&'a str>,
+    pub lease_expires_at_ms: Option<i64>,
+    pub updated_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Queryable, Selectable)]
+#[diesel(table_name = items)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct RunItemRow {
+    pub id: String,
+    pub run_id: String,
+    pub seq: i64,
+    pub kind: String,
+    pub role: Option<String>,
+    pub status: String,
+    pub content_json: String,
+    pub provider_item_id: Option<String>,
+    pub call_id: Option<String>,
+    pub created_at_ms: i64,
+}
+
+impl TryFrom<RunItemRow> for RunItem {
+    type Error = StoreError;
+
+    fn try_from(row: RunItemRow) -> Result<Self, Self::Error> {
+        let content =
+            serde_json::from_str(&row.content_json).map_err(|error| StoreError::InvalidData {
+                message: format!("item {} content is invalid: {error}", row.id),
+            })?;
+        Ok(Self {
+            id: row.id,
+            run_id: row.run_id,
+            seq: row.seq,
+            kind: row.kind,
+            role: row.role,
+            status: row.status,
+            content,
+            provider_item_id: row.provider_item_id,
+            call_id: row.call_id,
+            created_at_ms: row.created_at_ms,
+        })
+    }
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = items)]
+pub struct NewRunItemRow<'a> {
+    pub id: &'a str,
+    pub run_id: &'a str,
+    pub seq: i64,
+    pub kind: &'a str,
+    pub role: Option<&'a str>,
+    pub status: &'a str,
+    pub content_json: &'a str,
+    pub provider_item_id: Option<&'a str>,
+    pub call_id: Option<&'a str>,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Queryable, Selectable)]
+#[diesel(table_name = run_events)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct RunEventRow {
+    pub id: String,
+    pub run_id: String,
+    pub seq: i64,
+    pub kind: String,
+    pub payload_json: String,
+    pub persisted_at_ms: i64,
+}
+
+impl TryFrom<RunEventRow> for RunEvent {
+    type Error = StoreError;
+
+    fn try_from(row: RunEventRow) -> Result<Self, Self::Error> {
+        let payload =
+            serde_json::from_str(&row.payload_json).map_err(|error| StoreError::InvalidData {
+                message: format!("event {} payload is invalid: {error}", row.id),
+            })?;
+        Ok(Self {
+            id: row.id,
+            run_id: row.run_id,
+            seq: row.seq,
+            kind: row.kind,
+            payload,
+            persisted_at_ms: row.persisted_at_ms,
+        })
+    }
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = run_events)]
+pub struct NewRunEventRow<'a> {
+    pub id: &'a str,
+    pub run_id: &'a str,
+    pub seq: i64,
+    pub kind: &'a str,
+    pub payload_json: &'a str,
+    pub persisted_at_ms: i64,
+}
+
+#[derive(Debug, Queryable, Selectable)]
+#[diesel(table_name = tool_executions)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct ToolExecutionRow {
+    pub id: String,
+    pub run_id: String,
+    pub call_id: String,
+    pub tool_name: String,
+    pub status: String,
+    pub risk: String,
+    pub arguments_json: String,
+    pub arguments_hash: String,
+    pub output_json: Option<String>,
+    pub error_message: Option<String>,
+    pub retryable: bool,
+    pub prepared_at_ms: i64,
+    pub started_at_ms: Option<i64>,
+    pub completed_at_ms: Option<i64>,
+}
+
+impl TryFrom<ToolExecutionRow> for ToolExecution {
+    type Error = StoreError;
+
+    fn try_from(row: ToolExecutionRow) -> Result<Self, Self::Error> {
+        let arguments =
+            serde_json::from_str(&row.arguments_json).map_err(|error| StoreError::InvalidData {
+                message: format!("tool execution {} arguments are invalid: {error}", row.id),
+            })?;
+        let output = row
+            .output_json
+            .map(|value| serde_json::from_str(&value))
+            .transpose()
+            .map_err(|error| StoreError::InvalidData {
+                message: format!("tool execution {} output is invalid: {error}", row.id),
+            })?;
+        Ok(Self {
+            id: row.id,
+            run_id: row.run_id,
+            call_id: row.call_id,
+            tool_name: row.tool_name,
+            status: row.status,
+            risk: row.risk,
+            arguments,
+            arguments_hash: row.arguments_hash,
+            output,
+            error_message: row.error_message,
+            retryable: row.retryable,
+            prepared_at_ms: row.prepared_at_ms,
+            started_at_ms: row.started_at_ms,
+            completed_at_ms: row.completed_at_ms,
+        })
+    }
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = tool_executions)]
+pub struct NewToolExecutionRow<'a> {
+    pub id: &'a str,
+    pub run_id: &'a str,
+    pub call_id: &'a str,
+    pub tool_name: &'a str,
+    pub status: &'a str,
+    pub risk: &'a str,
+    pub arguments_json: &'a str,
+    pub arguments_hash: &'a str,
+    pub output_json: Option<&'a str>,
+    pub error_message: Option<&'a str>,
+    pub retryable: bool,
+    pub prepared_at_ms: i64,
+    pub started_at_ms: Option<i64>,
+    pub completed_at_ms: Option<i64>,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = plans)]
+pub struct NewPlanRow<'a> {
+    pub id: &'a str,
+    pub run_id: &'a str,
+    pub revision: i64,
+    pub goal: &'a str,
+    pub status: &'a str,
+    pub created_at_ms: i64,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = plan_steps)]
+pub struct NewPlanStepRow<'a> {
+    pub id: &'a str,
+    pub plan_id: &'a str,
+    pub ordinal: i64,
+    pub title: &'a str,
+    pub acceptance: &'a str,
+    pub status: &'a str,
+    pub attempt: i64,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = run_snapshots)]
+pub struct NewRunSnapshotRow<'a> {
+    pub run_id: &'a str,
+    pub event_high_water_seq: i64,
+    pub state_json: &'a str,
+    pub updated_at_ms: i64,
+}
 
 #[derive(Debug, Queryable, Selectable)]
 #[diesel(table_name = attachments)]

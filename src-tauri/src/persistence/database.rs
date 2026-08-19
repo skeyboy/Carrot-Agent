@@ -124,7 +124,8 @@ mod tests {
         let tables = sql_query(
             "SELECT COUNT(*) AS count FROM sqlite_master \
              WHERE type = 'table' AND name IN \
-             ('conversations', 'runs', 'items', 'run_events', 'pending_inputs')",
+             ('conversations', 'runs', 'items', 'run_events', 'pending_inputs',
+              'tool_executions', 'plans', 'plan_steps', 'run_snapshots')",
         )
         .get_result::<Count>(&mut connection)
         .await
@@ -134,7 +135,7 @@ mod tests {
             .await
             .expect("journal mode");
 
-        assert_eq!(tables.count, 5);
+        assert_eq!(tables.count, 9);
         assert_eq!(journal.journal_mode, "wal");
     }
 

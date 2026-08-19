@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::runtime::{
     ImageDetail, LlmProvider, MessageContent, MessageRole, ProviderError, ProviderEvent,
-    ProviderRequest,
+    ProviderInputItem, ProviderRequest,
 };
 
 pub struct OpenAiResponsesProvider {
@@ -36,46 +36,64 @@ impl OpenAiResponsesProvider {
             ));
         }
 
-        let messages = request
-            .messages
+        let input = request
+            .input
             .into_iter()
-            .map(|message| {
-                let content = message
-                    .content
-                    .into_iter()
-                    .map(|content| match content {
-                        MessageContent::Text { text } => {
-                            InputContent::InputText(InputTextContent { text })
-                        }
-                        MessageContent::ImageDataUrl { data_url, detail } => {
-                            InputContent::InputImage(InputImageContent {
-                                detail: match detail {
-                                    ImageDetail::Auto => OpenAiImageDetail::Auto,
-                                    ImageDetail::Low => OpenAiImageDetail::Low,
-                                    ImageDetail::High => OpenAiImageDetail::High,
-                                },
-                                file_id: None,
-                                image_url: Some(data_url),
-                            })
-                        }
+            .map(|item| match item {
+                ProviderInputItem::Message { message } => {
+                    let content = message
+                        .content
+                        .into_iter()
+                        .map(|content| match content {
+                            MessageContent::Text { text } => {
+                                InputContent::InputText(InputTextContent { text })
+                            }
+                            MessageContent::ImageDataUrl { data_url, detail } => {
+                                InputContent::InputImage(InputImageContent {
+                                    detail: match detail {
+                                        ImageDetail::Auto => OpenAiImageDetail::Auto,
+                                        ImageDetail::Low => OpenAiImageDetail::Low,
+                                        ImageDetail::High => OpenAiImageDetail::High,
+                                    },
+                                    file_id: None,
+                                    image_url: Some(data_url),
+                                })
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    let content = serde_json::to_value(EasyInputContent::ContentList(content))
+                        .map_err(|error| ProviderError::InvalidRequest(error.to_string()))?;
+                    serde_json::to_value(ResponseInputItem {
+                        role: match message.role {
+                            MessageRole::System => Role::System,
+                            MessageRole::Developer => Role::Developer,
+                            MessageRole::User => Role::User,
+                            MessageRole::Assistant => Role::Assistant,
+                        },
+                        content,
                     })
-                    .collect::<Vec<_>>();
-                let content = serde_json::to_value(EasyInputContent::ContentList(content))
-                    .map_err(|error| ProviderError::InvalidRequest(error.to_string()))?;
-                Ok(ResponseInputItem {
-                    role: match message.role {
-                        MessageRole::System => Role::System,
-                        MessageRole::Developer => Role::Developer,
-                        MessageRole::User => Role::User,
-                        MessageRole::Assistant => Role::Assistant,
-                    },
-                    content,
-                })
+                    .map_err(|error| ProviderError::InvalidRequest(error.to_string()))
+                }
+                ProviderInputItem::ToolCall {
+                    call_id,
+                    name,
+                    arguments,
+                } => Ok(serde_json::json!({
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": serde_json::to_string(&arguments).map_err(|error| ProviderError::InvalidRequest(error.to_string()))?,
+                })),
+                ProviderInputItem::ToolOutput { call_id, output } => Ok(serde_json::json!({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": serde_json::to_string(&output).map_err(|error| ProviderError::InvalidRequest(error.to_string()))?,
+                })),
             })
             .collect::<Result<Vec<_>, ProviderError>>()?;
 
         let mut output = ResponseCreateRequest::new(request.model);
-        output.input = Some(ResponseInput::Messages(messages));
+        output.input = Some(ResponseInput::Items(input));
         output.previous_response_id = request.previous_response_id;
         output.store = Some(request.store);
         output.parallel_tool_calls = Some(true);
@@ -201,24 +219,27 @@ impl LlmProvider for OpenAiResponsesProvider {
 mod tests {
     use super::OpenAiResponsesProvider;
     use crate::providers::runtime::{
-        ImageDetail, MessageContent, MessageRole, ProviderMessage, ProviderRequest, ToolDefinition,
+        ImageDetail, MessageContent, MessageRole, ProviderInputItem, ProviderMessage,
+        ProviderRequest, ToolDefinition,
     };
 
     #[test]
     fn maps_images_tools_and_store_to_responses_request() {
         let request = OpenAiResponsesProvider::build_request(ProviderRequest {
             model: "gpt-test".to_owned(),
-            messages: vec![ProviderMessage {
-                role: MessageRole::User,
-                content: vec![
-                    MessageContent::Text {
-                        text: "Inspect".to_owned(),
-                    },
-                    MessageContent::ImageDataUrl {
-                        data_url: "data:image/png;base64,AA==".to_owned(),
-                        detail: ImageDetail::Auto,
-                    },
-                ],
+            input: vec![ProviderInputItem::Message {
+                message: ProviderMessage {
+                    role: MessageRole::User,
+                    content: vec![
+                        MessageContent::Text {
+                            text: "Inspect".to_owned(),
+                        },
+                        MessageContent::ImageDataUrl {
+                            data_url: "data:image/png;base64,AA==".to_owned(),
+                            detail: ImageDetail::Auto,
+                        },
+                    ],
+                },
             }],
             tools: vec![ToolDefinition {
                 name: "lookup".to_owned(),

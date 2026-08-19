@@ -2,10 +2,12 @@
 
 mod config;
 mod model_catalog;
+mod openai_chat;
 mod openai_responses;
 pub(crate) mod runtime;
 
 pub use config::{ProviderConfigError, ProviderConfigLoader};
 pub use model_catalog::OpenAiModelCatalog;
+pub use openai_chat::OpenAiChatProvider;
 pub use openai_responses::OpenAiResponsesProvider;
-pub use runtime::{LlmProvider, ProviderEvent, ProviderRequest};
+pub use runtime::{LlmProvider, ProviderEvent};

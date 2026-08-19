@@ -35,9 +35,17 @@ export const commands = {
 	attachmentDelete: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("attachment_delete", { id })),
 	chatStart: (request: ChatStartRequest) => typedError<ChatStartResponse, AppError>(__TAURI_INVOKE("chat_start", { request })),
 	chatCancel: (runId: string) => typedError<null, AppError>(__TAURI_INVOKE("chat_cancel", { runId })),
+	chatSnapshot: (conversationId: string) => typedError<ChatSnapshotDto, AppError>(__TAURI_INVOKE("chat_snapshot", { conversationId })),
 };
 
 /* Types */
+export type ActiveRunDto = {
+	id: string,
+	status: RunStatus,
+	phase: RunPhase,
+	lastEventSeq: string,
+};
+
 export type AppError = { code: "INVALID_INPUT"; message: string } | { code: "NOT_FOUND"; message: string } | { code: "CONFLICT"; message: string } | { code: "STORAGE"; message: string } | { code: "CONFIGURATION"; message: string } | { code: "INTERNAL"; message: string };
 
 export type AppSettings = {
@@ -55,6 +63,14 @@ export type AttachmentDto = {
 	byteLength: string,
 	contentHash: string,
 	createdAtMs: string,
+};
+
+export type ChatSnapshotDto = {
+	conversationId: string,
+	activeRun: ActiveRunDto | null,
+	items: RunItemDto[],
+	events: RunEventDto[],
+	toolExecutions: ToolExecutionDto[],
 };
 
 export type ChatStartRequest = {
@@ -141,6 +157,29 @@ export type ProviderProfilesDto = {
 
 export type ProviderProtocol = "responses" | "chat_completions";
 
+export type RunEventDto = {
+	runId: string,
+	seq: string,
+	kind: string,
+	payloadJson: string,
+	persistedAtMs: string,
+};
+
+export type RunItemDto = {
+	id: string,
+	runId: string,
+	seq: string,
+	kind: string,
+	role: string | null,
+	contentJson: string,
+	callId: string | null,
+	createdAtMs: string,
+};
+
+export type RunPhase = "routing" | "planning" | "model_stream" | "tool_prepare" | "tool_execute" | "observation_commit" | "reflecting" | "finalizing" | "none";
+
+export type RunStatus = "queued" | "running" | "pause_requested" | "paused" | "suspended" | "waiting_for_approval" | "completed" | "failed" | "cancelled" | "interrupted" | "recovery_required";
+
 export type RunStrategy = "fast" | "auto" | "quality";
 
 export type SetCredentialRequest = {
@@ -153,6 +192,18 @@ export type SettingsSnapshotDto = {
 	settingsPath: string,
 	databasePath: string,
 	attachmentPath: string,
+};
+
+export type ToolExecutionDto = {
+	id: string,
+	runId: string,
+	callId: string,
+	toolName: string,
+	status: string,
+	risk: string,
+	argumentsJson: string,
+	outputJson: string | null,
+	errorMessage: string | null,
 };
 
 export type UpdateConversationRequest = {

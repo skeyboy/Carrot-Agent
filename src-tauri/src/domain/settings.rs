@@ -29,6 +29,25 @@ pub enum RunStrategy {
     Quality,
 }
 
+impl RunStrategy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Auto => "auto",
+            Self::Quality => "quality",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "fast" => Self::Fast,
+            "auto" => Self::Auto,
+            "quality" => Self::Quality,
+            _ => return None,
+        })
+    }
+}
+
 impl AppSettings {
     pub fn validate(&self) -> Result<(), String> {
         if !(10..=900).contains(&self.request_timeout_seconds) {

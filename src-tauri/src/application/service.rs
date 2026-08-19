@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
 use crate::agent::cancellation::CancellationTree;
+use crate::agent::runtime::{AgentRuntime, RuntimeInput};
 use crate::credentials::{CredentialStore, SystemCredentialStore};
 use crate::domain::attachment::AttachmentDescriptor;
 use crate::domain::conversation::{Conversation, ConversationChanges, NewConversation};
@@ -14,16 +15,20 @@ use crate::domain::provider::{
     NewProviderProfile, ProviderCatalog, ProviderProfile, ProviderProfileChanges,
 };
 use crate::domain::settings::AppSettings;
-use crate::domain::storage::ConversationStore;
+use crate::domain::storage::{ConversationStore, RunStore};
 use crate::error::AppError;
-use crate::persistence::{Database, SqliteAttachmentStore, SqliteConversationStore};
+use crate::persistence::{
+    Database, SqliteAttachmentStore, SqliteConversationStore, SqliteRunStore,
+};
 use crate::providers::runtime::{ImageDetail, MessageContent, MessageRole, ProviderMessage};
-use crate::providers::{LlmProvider, OpenAiResponsesProvider, ProviderEvent, ProviderRequest};
+use crate::providers::{LlmProvider, OpenAiChatProvider, OpenAiResponsesProvider, ProviderEvent};
 use crate::providers::{OpenAiModelCatalog, ProviderConfigLoader};
 use crate::settings::SettingsStore;
+use crate::tools::ToolRegistry;
 
 pub struct CarrotService {
     conversations: Arc<dyn ConversationStore>,
+    runs: Arc<dyn RunStore>,
     attachments: SqliteAttachmentStore,
     credentials: Arc<dyn CredentialStore>,
     provider_loader: ProviderConfigLoader,
@@ -32,6 +37,7 @@ pub struct CarrotService {
     database_path: PathBuf,
     attachment_path: PathBuf,
     cancellation: CancellationTree,
+    runtime_instance_id: String,
 }
 
 impl CarrotService {
@@ -50,9 +56,11 @@ impl CarrotService {
             .await
             .map_err(AppError::from)?;
         let settings = SettingsStore::load(settings_path).await?;
+        let runs: Arc<dyn RunStore> = Arc::new(SqliteRunStore::new(database.clone()));
 
         Ok(Self {
             conversations: Arc::new(SqliteConversationStore::new(database.clone())),
+            runs,
             attachments: SqliteAttachmentStore::new(database),
             credentials: Arc::new(SystemCredentialStore),
             provider_loader,
@@ -61,6 +69,7 @@ impl CarrotService {
             database_path,
             attachment_path,
             cancellation: CancellationTree::default(),
+            runtime_instance_id: uuid::Uuid::now_v7().to_string(),
         })
     }
 
@@ -504,11 +513,6 @@ impl CarrotService {
                     &conversation.default_provider_profile_id,
                 )
             })?;
-        if profile.protocol != crate::domain::provider::ProviderProtocol::Responses {
-            return Err(AppError::Configuration {
-                message: "P2 streaming currently requires the Responses protocol".to_owned(),
-            });
-        }
         if !attachment_ids.is_empty() && !profile.capabilities.images {
             return Err(AppError::invalid_input(
                 "selected provider does not support images",
@@ -540,45 +544,59 @@ impl CarrotService {
             });
         }
 
-        let provider = OpenAiResponsesProvider::new(
-            self.credential(&profile.id).await?,
-            profile.base_url.clone(),
-        );
+        let api_key = match self.credential(&profile.id).await {
+            Ok(secret) => secret,
+            Err(_) if is_loopback_base_url(&profile.base_url) => "local-provider".to_owned(),
+            Err(error) => return Err(error),
+        };
+        let provider: Arc<dyn LlmProvider> = match profile.protocol {
+            crate::domain::provider::ProviderProtocol::Responses => Arc::new(
+                OpenAiResponsesProvider::new(api_key, profile.base_url.clone()),
+            ),
+            crate::domain::provider::ProviderProtocol::ChatCompletions => {
+                Arc::new(OpenAiChatProvider::new(api_key, profile.base_url.clone()))
+            }
+        };
         let cancellation = self.cancellation.begin_run(run_id.clone()).await;
-        let timeout = std::time::Duration::from_secs(u64::from(
-            self.settings().await.request_timeout_seconds,
-        ));
-        let request = ProviderRequest {
+        let settings = self.settings().await;
+        let runtime = AgentRuntime::new(self.runs.clone(), ToolRegistry::built_in());
+        let input = RuntimeInput {
+            run_id: run_id.clone(),
+            conversation_id,
+            strategy: settings.default_strategy,
+            provider_profile: profile,
             model: conversation.default_model,
-            messages: vec![ProviderMessage {
+            runtime_instance_id: self.runtime_instance_id.clone(),
+            user_message: ProviderMessage {
                 role: MessageRole::User,
                 content,
-            }],
-            tools: Vec::new(),
-            previous_response_id: None,
-            store: profile.store_responses,
+            },
+            max_model_steps: settings.max_model_steps,
+            request_timeout: std::time::Duration::from_secs(u64::from(
+                settings.request_timeout_seconds,
+            )),
         };
-        let result = tokio::time::timeout(
-            timeout,
-            provider.stream(request, events.clone(), cancellation.clone()),
-        )
-        .await;
+        let result = runtime
+            .run(provider, input, events, cancellation.clone())
+            .await;
         self.cancellation.finish_run(&run_id).await;
         match result {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => Err(AppError::Internal {
+            Ok(()) => Ok(()),
+            Err(error) => Err(AppError::Internal {
                 message: error.to_string(),
             }),
-            Err(_) => {
-                cancellation.cancel();
-                let _ = events
-                    .send(ProviderEvent::Failed {
-                        message: "request timed out".to_owned(),
-                    })
-                    .await;
-                Ok(())
-            }
         }
+    }
+
+    pub async fn chat_snapshot(
+        &self,
+        conversation_id: &str,
+    ) -> Result<crate::domain::run::ChatSnapshot, AppError> {
+        self.get_conversation(conversation_id).await?;
+        self.runs
+            .snapshot(conversation_id)
+            .await
+            .map_err(AppError::from)
     }
 
     pub async fn cancel_chat(&self, run_id: &str) -> Result<(), AppError> {

@@ -1,7 +1,14 @@
 import { listen } from "@tauri-apps/api/event";
 
 import { commands } from "../bindings";
-import type { AppError, AttachmentDto, ChatStartRequest, ChatStartResponse } from "../bindings";
+import type {
+  AppError,
+  AttachmentDto,
+  ChatSnapshotDto,
+  ChatStartRequest,
+  ChatStartResponse,
+  RunItemDto,
+} from "../bindings";
 
 export type ProviderEvent =
   | { type: "started"; response_id: string }
@@ -23,6 +30,7 @@ export interface ChatEvent {
 }
 
 const previewAttachments = new Map<string, AttachmentDto[]>();
+const previewItems = new Map<string, RunItemDto[]>();
 const previewHandlers = new Set<(event: ChatEvent) => void>();
 
 function isTauri() {
@@ -54,6 +62,37 @@ export async function removeAttachment(id: string): Promise<void> {
 export async function startChat(request: ChatStartRequest): Promise<ChatStartResponse> {
   if (!isTauri()) {
     const runId = crypto.randomUUID();
+    const now = Date.now().toString();
+    const items = previewItems.get(request.conversationId) ?? [];
+    items.push(
+      {
+        id: crypto.randomUUID(),
+        runId,
+        seq: "1",
+        kind: "message",
+        role: "user",
+        contentJson: JSON.stringify({
+          role: "user",
+          content: [{ type: "text", text: request.text }],
+        }),
+        callId: null,
+        createdAtMs: now,
+      },
+      {
+        id: crypto.randomUUID(),
+        runId,
+        seq: "2",
+        kind: "message",
+        role: "assistant",
+        contentJson: JSON.stringify({
+          role: "assistant",
+          content: [{ type: "text", text: "Preview response" }],
+        }),
+        callId: null,
+        createdAtMs: now,
+      },
+    );
+    previewItems.set(request.conversationId, items);
     queueMicrotask(() => {
       const publish = (event: ProviderEvent) =>
         previewHandlers.forEach((handler) =>
@@ -71,6 +110,19 @@ export async function startChat(request: ChatStartRequest): Promise<ChatStartRes
     return { runId };
   }
   return resultData(await commands.chatStart(request));
+}
+
+export async function getChatSnapshot(conversationId: string): Promise<ChatSnapshotDto> {
+  if (!isTauri()) {
+    return {
+      conversationId,
+      activeRun: null,
+      items: [...(previewItems.get(conversationId) ?? [])],
+      events: [],
+      toolExecutions: [],
+    };
+  }
+  return resultData(await commands.chatSnapshot(conversationId));
 }
 
 export async function cancelChat(runId: string): Promise<void> {

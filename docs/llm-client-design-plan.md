@@ -1,10 +1,10 @@
 # Carrot LLM 客户端设计与实施规划
 
-> 版本：v7
+> 版本：v8
 >
 > 更新日期：2026-08-19
 >
-> 当前阶段：P2 与 Provider 管理补充已完成，下一阶段 P3
+> 当前阶段：P3 已完成，下一阶段 P4 会话韧性与恢复
 
 ## 1. 产品目标与确认边界
 
@@ -113,7 +113,7 @@ Provider 领域请求包含模型、instructions、规范化 input items、附�
 
 配置加载必须验证 HTTPS 策略、URL、重复 ID 和未知字段。Loopback HTTP 可用于本地兼容服务；远程明文 HTTP 默认拒绝。兼容 Provider 必须通过能力协商或显式配置区分 Responses 与 Chat Completions，不假设所有 `/v1` 服务都支持相同协议。
 
-P2 补充将配置升级为版本化 Provider Catalog，持久化默认 Provider、远端模型目录、启用模型和默认模型。模型目录通过 OpenAI-compatible `GET /models` 同步，但不根据名称推断对话能力。所有修改经 Rust 校验后原子写回本地文件，应用启动重新加载。完整结论见 [Phase 2 Provider 管理补充报告](phase-2-provider-management.md)。
+P2 补充将配置升级为版本化 Provider Catalog，持久化默认 Provider、远端模型目录、启用模型和默认模型。模型目录通过 OpenAI-compatible `GET /models` 同步，但不根据名称推断对话能力。所有修改经 Rust 校验后原子写回本地文件，应用启动重新加载。完整结论见 [Phase 2 Provider 管理补充报告](phase-2-provider-management.md)。P3 已让 Responses 与 Chat Completions Profile 都进入统一 Runtime，详见 [P3 Durable Agent Runtime 阶段报告](phase-3-durable-agent-runtime.md)。
 
 API Key 不允许写入配置文件，配置只保存 OS credential reference。
 
@@ -185,13 +185,13 @@ P1 创建 `runs`、`items`、`run_events` 与 `pending_inputs` 的稳定数据�
 
 ### Provider SDK 选型
 
-P2 已采用第三方 Rust SDK `openai-oxide` 0.16 作为 OpenAI Responses Adapter。依赖关闭 default features，仅启用 `responses`；自定义 Base URL、`store`、图片 data URL、严格 Function Schema、文本增量和 function-call 完成事件均转换为 Carrot 自有模型。Chat Completions compatible Adapter 仍待后续实现，不能因为 Profile 可配置就宣称该协议已可执行。
+P2 已采用第三方 Rust SDK `openai-oxide` 0.16 作为 OpenAI Responses Adapter。P3 在关闭 default features 的前提下启用 `responses`、`chat` 和 `models`；自定义 Base URL、`store`、图片 data URL、严格 Function Schema、文本增量和 function-call 完成事件均转换为 Carrot 自有模型。Chat Completions compatible Adapter 已使用本地 `127.0.0.1:11434/v1` 完成流式实测；工具调用能力仍以具体服务是否返回结构化 `tool_calls` 为准。
 
 `openai-oxide` 不作为原生 Gemini SDK。Gemini 的 OpenAI-compatible 网关只有在协议契约测试通过时才复用 compatible Adapter；未来直连 Gemini 原生 API 时实现独立 `GeminiProvider`，并在该阶段评估原生 SDK 或多 Provider SDK。无论采用何种 SDK，Agent Runtime 只看到 Carrot 自有的 Provider domain model。
 
 ## 10. Tauri IPC
 
-Command 负责请求/响应，P2 通过带 `run_id` 的 Tauri Event 转发 Provider 流；P3 durable Runtime 引入单调 sequence、缺口检测与快照恢复。前端不得获得通用 SQL、任意 HTTP 代理、任意工具执行、密钥读取或任意路径访问接口。
+Command 负责请求/响应，P2 通过带 `run_id` 的 Tauri Event 转发 Provider 流；P3 durable Runtime 为 committed Event 引入单调 sequence 和 `chat_snapshot` 恢复。token delta 保持 transient，不占用数据库事务序号；最终消息与工具轨迹通过 Snapshot 对账。前端不得获得通用 SQL、任意 HTTP 代理、任意工具执行、密钥读取或任意路径访问接口。
 
 P1-P3 逐步加入：
 
@@ -208,7 +208,7 @@ sync_peer_scan/pair/start/stop
 credential_set/delete
 ```
 
-Rust DTO 是 IPC 真相源，通过 Tauri Specta 生成 `src/bindings.ts`。所有流事件包含 `run_id` 与单调递增 `seq`；前端发现缺口后获取后端快照，不猜测丢失内容。
+Rust DTO 是 IPC 真相源，通过 Tauri Specta 生成 `src/bindings.ts`。所有 durable 事件包含 `run_id` 与单调递增 `seq`；transient 流事件只负责即时显示。前端在加载和终态后获取后端快照，不猜测丢失内容。
 
 ## 11. Vue 前端
 

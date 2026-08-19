@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS run_snapshots;
+DROP TABLE IF EXISTS plan_steps;
+DROP TABLE IF EXISTS plans;
+DROP TABLE IF EXISTS tool_executions;
