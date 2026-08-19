@@ -2,6 +2,8 @@
 import { BrainCircuit, ChevronDown, ChevronRight, LoaderCircle } from "lucide-vue-next";
 import { ref, watch } from "vue";
 
+import MarkdownContent from "./MarkdownContent.vue";
+
 const props = defineProps<{
   text: string;
   running: boolean;
@@ -41,6 +43,6 @@ function durationLabel() {
       <ChevronDown v-if="expanded" :size="14" aria-hidden="true" />
       <ChevronRight v-else :size="14" aria-hidden="true" />
     </button>
-    <p v-if="running || expanded" class="reasoning-content">{{ text }}</p>
+    <MarkdownContent v-if="running || expanded" class="reasoning-content" :source="text" />
   </section>
 </template>

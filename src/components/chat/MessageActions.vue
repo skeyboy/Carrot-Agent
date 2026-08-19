@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { Check, Copy } from "lucide-vue-next";
-import { onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 
-const props = defineProps<{ text: string }>();
+const props = defineProps<{ text: string; kind: "message" | "response" }>();
 const emit = defineEmits<{ error: [message: string] }>();
 const copied = ref(false);
+const copyLabel = computed(() => `Copy ${props.kind}`);
 let resetTimer: ReturnType<typeof setTimeout> | undefined;
 
 onBeforeUnmount(() => clearTimeout(resetTimer));
 
-async function copyResponse() {
+async function copyText() {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(props.text);
@@ -22,7 +23,7 @@ async function copyResponse() {
       copyWithSelection(props.text);
       showCopied();
     } catch {
-      emit("error", "The response could not be copied");
+      emit("error", `The ${props.kind} could not be copied`);
     }
   }
 }
@@ -49,12 +50,12 @@ function copyWithSelection(text: string) {
 </script>
 
 <template>
-  <div class="assistant-message-actions">
+  <div class="message-actions">
     <button
       type="button"
-      :title="copied ? 'Copied' : 'Copy response'"
-      :aria-label="copied ? 'Response copied' : 'Copy response'"
-      @click="copyResponse"
+      :title="copied ? 'Copied' : copyLabel"
+      :aria-label="copied ? `${kind === 'message' ? 'Message' : 'Response'} copied` : copyLabel"
+      @click="copyText"
     >
       <Check v-if="copied" :size="13" />
       <Copy v-else :size="13" />

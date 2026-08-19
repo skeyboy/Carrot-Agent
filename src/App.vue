@@ -431,10 +431,8 @@ onMounted(loadWorkspace);
 
       <template v-else-if="selectedConversation">
         <header class="conversation-header">
-          <div>
-            <p>Conversation</p>
-            <h1>{{ selectedConversation.title }}</h1>
-          </div>
+          <MessageSquare :size="15" aria-hidden="true" />
+          <h1>{{ selectedConversation.title }}</h1>
         </header>
         <ConversationThread
           :key="selectedConversation.id"

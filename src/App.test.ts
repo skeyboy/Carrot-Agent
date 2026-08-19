@@ -187,7 +187,31 @@ describe("App", () => {
     expect(wrapper.findAll(".message.user")).toHaveLength(1);
     expect(wrapper.get(".message.user").text()).toContain("Final edit");
 
+    await wrapper.get('[aria-label="Copy message"]').trigger("click");
+    expect(writeText).toHaveBeenCalledWith("Final edit");
     await wrapper.get('[aria-label="Copy response"]').trigger("click");
     expect(writeText).toHaveBeenCalledWith("Preview response");
+  });
+
+  it("renders message Markdown while keeping unsafe HTML and links inert", async () => {
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get('[aria-label="New conversation"]').trigger("click");
+    await wrapper.get("#conversation-title").setValue("Markdown test");
+    await wrapper.get(".create-form").trigger("submit");
+    await flushPromises();
+
+    const source =
+      "# Heading\n\n- **Bold item**\n\n<script>window.bad = true</script>\n\n[bad](javascript:alert(1))";
+    await wrapper.get('[aria-label="Message"]').setValue(source);
+    await wrapper.get(".chat-composer form").trigger("submit");
+    await new Promise((resolve) => setTimeout(resolve, 1_450));
+    await flushPromises();
+
+    const message = wrapper.get(".message.user .markdown-body");
+    expect(message.get("h1").text()).toBe("Heading");
+    expect(message.get("li strong").text()).toBe("Bold item");
+    expect(message.find("script").exists()).toBe(false);
+    expect(message.find('a[href^="javascript:"]').exists()).toBe(false);
   });
 });

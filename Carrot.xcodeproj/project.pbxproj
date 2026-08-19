@@ -1,0 +1,131 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXFileReference section */
+		CA0000000000000000000001 /* src */ = {isa = PBXFileReference; lastKnownFileType = folder; name = src; path = src; sourceTree = "<group>"; };
+		CA0000000000000000000002 /* src-tauri */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "src-tauri"; path = "src-tauri"; sourceTree = "<group>"; };
+		CA0000000000000000000003 /* package.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = package.json; sourceTree = "<group>"; };
+		CA0000000000000000000004 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		CA0000000000000000000005 /* docs */ = {isa = PBXFileReference; lastKnownFileType = folder; name = docs; path = docs; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		CA0000000000000000000010 = {
+			isa = PBXGroup;
+			children = (
+				CA0000000000000000000001 /* src */,
+				CA0000000000000000000002 /* src-tauri */,
+				CA0000000000000000000005 /* docs */,
+				CA0000000000000000000003 /* package.json */,
+				CA0000000000000000000004 /* README.md */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXLegacyTarget section */
+		CA0000000000000000000020 /* Carrot */ = {
+			isa = PBXLegacyTarget;
+			buildArgumentsString = "\"$(SRCROOT)/scripts/xcode-build.sh\"";
+			buildConfigurationList = CA0000000000000000000031 /* Build configuration list for PBXLegacyTarget \"Carrot\" */;
+			buildPhases = (
+			);
+			buildToolPath = /bin/bash;
+			buildWorkingDirectory = "$(SRCROOT)";
+			dependencies = (
+			);
+			name = Carrot;
+			passBuildSettingsInEnvironment = 1;
+			productName = Carrot;
+		};
+/* End PBXLegacyTarget section */
+
+/* Begin PBXProject section */
+		CA0000000000000000000030 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2660;
+			};
+			buildConfigurationList = CA0000000000000000000032 /* Build configuration list for PBXProject \"Carrot\" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = CA0000000000000000000010;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				CA0000000000000000000020 /* Carrot */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin XCBuildConfiguration section */
+		CA0000000000000000000040 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				PRODUCT_NAME = Carrot;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		CA0000000000000000000041 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				PRODUCT_NAME = Carrot;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		CA0000000000000000000042 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		CA0000000000000000000043 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CA0000000000000000000031 /* Build configuration list for PBXLegacyTarget \"Carrot\" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CA0000000000000000000040 /* Debug */,
+				CA0000000000000000000041 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CA0000000000000000000032 /* Build configuration list for PBXProject \"Carrot\" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CA0000000000000000000042 /* Debug */,
+				CA0000000000000000000043 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = CA0000000000000000000030 /* Project object */;
+}

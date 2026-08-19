@@ -274,7 +274,7 @@ Rust 单元测试覆盖 SSE 分片、Schema、call/output 关联、状态机、�
 
 每个阶段完成后更新独立阶段报告，记录交付物、验证命令、遗留风险和下一阶段计划。
 
-P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。P2 阶段结论见 [Phase 2 Provider Runtime 报告](phase-2-provider-runtime.md)，P3 结论见 [P3 Durable Agent Runtime 阶段报告](phase-3-durable-agent-runtime.md)。P4 交互与恢复切片见 [P4 会话体验与运行控制切片](phase-4-chat-experience.md)、[P4 主题、推理摘要与运行恢复切片](phase-4-appearance-and-reasoning.md)，最终收口见 [P4 韧性、审批与 macOS 加固报告](phase-4-resilience-and-macos.md)。当前已落地完整 inbox 分支消费、附件持久化、高风险审批、业务幂等键、人工 reconcile、生命周期故障恢复和 macOS bundle 加固；Developer ID 签名与 Apple 公证由发布环境门禁完成。
+P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。P2 阶段结论见 [Phase 2 Provider Runtime 报告](phase-2-provider-runtime.md)，P3 结论见 [P3 Durable Agent Runtime 阶段报告](phase-3-durable-agent-runtime.md)。P4 交互与恢复切片见 [P4 会话体验与运行控制切片](phase-4-chat-experience.md)、[P4 主题、推理摘要与运行恢复切片](phase-4-appearance-and-reasoning.md)，最终收口见 [P4 韧性、审批与 macOS 加固报告](phase-4-resilience-and-macos.md)，Markdown 阅读体验与 Xcode 调试入口见 [P4 Markdown 会话体验与 Xcode 调试补充](phase-4-markdown-and-xcode.md)。当前已落地完整 inbox 分支消费、附件持久化、高风险审批、业务幂等键、人工 reconcile、生命周期故障恢复、Markdown 安全预览、Xcode 本地调试和 macOS bundle 加固；Developer ID 签名与 Apple 公证由发布环境门禁完成。
 
 ## 16. P0 验收
 

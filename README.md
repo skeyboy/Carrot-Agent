@@ -24,6 +24,8 @@ npm run check
 
 `npm run bindings` regenerates [src/bindings.ts](src/bindings.ts) from Rust commands and DTOs. The generated file is committed so frontend checks do not depend on starting the desktop runtime.
 
+For native macOS debugging, open `Carrot.xcodeproj` and use the shared Carrot scheme. `Command+B` builds the Vue assets and Rust binary; `Command+R` launches `src-tauri/target/debug/carrot` under LLDB without requiring a separate Vite process.
+
 ## Documentation
 
 - [System design and implementation plan](docs/llm-client-design-plan.md)
@@ -36,4 +38,5 @@ npm run check
 - [Phase 4 chat experience slice](docs/phase-4-chat-experience.md)
 - [Phase 4 appearance, reasoning and recovery slice](docs/phase-4-appearance-and-reasoning.md)
 - [Phase 4 resilience, approval and macOS hardening report](docs/phase-4-resilience-and-macos.md)
+- [Phase 4 Markdown experience and Xcode debugging supplement](docs/phase-4-markdown-and-xcode.md)
 - [Architecture decision records](docs/adr/)

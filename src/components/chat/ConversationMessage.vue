@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { Bot, UserRound, Wrench } from "lucide-vue-next";
 
-import AssistantMessageActions from "./AssistantMessageActions.vue";
+import MarkdownContent from "./MarkdownContent.vue";
+import MessageActions from "./MessageActions.vue";
 import ReasoningDisclosure from "./ReasoningDisclosure.vue";
 
 defineProps<{
@@ -19,7 +20,13 @@ const emit = defineEmits<{ error: [message: string] }>();
   <article class="message" :class="role">
     <template v-if="role === 'user'">
       <div class="message-content">
-        <p>{{ text }}</p>
+        <MarkdownContent :source="text" />
+        <MessageActions
+          v-if="settled && text"
+          :text="text"
+          kind="message"
+          @error="emit('error', $event)"
+        />
       </div>
       <UserRound :size="16" aria-hidden="true" />
     </template>
@@ -33,11 +40,12 @@ const emit = defineEmits<{ error: [message: string] }>();
           :running="reasoningRunning"
           :duration-ms="reasoningDurationMs"
         />
-        <p v-if="text">{{ text }}</p>
+        <MarkdownContent v-if="text" :source="text" />
         <p v-else-if="!reasoning">…</p>
-        <AssistantMessageActions
+        <MessageActions
           v-if="role === 'assistant' && settled && text"
           :text="text"
+          kind="response"
           @error="emit('error', $event)"
         />
       </div>
