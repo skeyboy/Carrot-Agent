@@ -23,6 +23,22 @@ import {
   updateSettings,
 } from "./api/settings";
 import { loadHealthStatus } from "./api/system";
+import {
+  beginMcpOAuth,
+  clearMcpAuth,
+  completeMcpOAuth,
+  connectMcpServer,
+  createMcpServer,
+  deleteMcpServer,
+  disconnectMcpServer,
+  getMcpCatalog,
+  installMcpPreset,
+  refreshMcpServer,
+  setMcpAuth,
+  setMcpToolPolicy,
+  updateMcpSystemSettings,
+  updateMcpServer,
+} from "./api/mcp";
 import { useTheme } from "./composables/useTheme";
 import SidebarSettingsNav from "./components/SidebarSettingsNav.vue";
 import SettingsPage from "./components/settings/SettingsPage.vue";
@@ -33,6 +49,11 @@ import type {
   CreateProviderProfileRequest,
   CredentialStatusDto,
   HealthStatus,
+  McpCatalogSnapshot,
+  McpOAuthStart,
+  McpServerConfig,
+  McpSystemSettings,
+  McpToolPolicy,
   ProviderProfilesDto,
   SettingsSnapshotDto,
   UpdateProviderProfileRequest,
@@ -44,6 +65,7 @@ const providers = ref<ProviderProfilesDto>({ configPath: "", defaultProviderId: 
 const settingsSnapshot = ref<SettingsSnapshotDto | null>(null);
 const credentialStatuses = ref<CredentialStatusDto[]>([]);
 const health = ref<HealthStatus | null>(null);
+const mcpCatalog = ref<McpCatalogSnapshot | null>(null);
 const appView = ref<AppView>("workspace");
 const settingsSection = ref<SettingsSection>("providers");
 const selectedId = ref<string | null>(null);
@@ -57,6 +79,8 @@ const editingId = ref<string | null>(null);
 const editingTitle = ref("");
 const isSavingSettings = ref(false);
 const busyProviderId = ref<string | null>(null);
+const busyMcpServerId = ref<string | null>(null);
+const mcpOauthStart = ref<McpOAuthStart | null>(null);
 
 const selectedConversation = computed(
   () => conversations.value.find((conversation) => conversation.id === selectedId.value) ?? null,
@@ -68,19 +92,21 @@ async function loadWorkspace() {
   isLoading.value = true;
   error.value = null;
   try {
-    const [conversationItems, providerItems, settingsValue, statuses, healthValue] =
+    const [conversationItems, providerItems, settingsValue, statuses, healthValue, mcpValue] =
       await Promise.all([
         listConversations(),
         listProviderProfiles(),
         getSettings(),
         listCredentialStatuses(),
         loadHealthStatus(),
+        getMcpCatalog(),
       ]);
     conversations.value = conversationItems;
     providers.value = providerItems;
     settingsSnapshot.value = settingsValue;
     credentialStatuses.value = statuses;
     health.value = healthValue;
+    mcpCatalog.value = mcpValue;
     newProviderId.value = providerItems.defaultProviderId;
     selectedId.value = conversationItems[0]?.id ?? null;
   } catch (cause) {
@@ -286,6 +312,85 @@ async function runProviderAction(
   }
 }
 
+async function runMcpAction(
+  serverId: string,
+  action: () => Promise<McpCatalogSnapshot>,
+): Promise<void> {
+  busyMcpServerId.value = serverId;
+  error.value = null;
+  try {
+    mcpCatalog.value = await action();
+  } catch (cause) {
+    error.value = errorMessage(cause);
+  } finally {
+    busyMcpServerId.value = null;
+  }
+}
+
+async function addMcpServer(config: McpServerConfig) {
+  await runMcpAction(config.id || "new", () => createMcpServer(config));
+}
+
+async function installPreset(
+  preset: "workspace_filesystem" | "brave_search",
+  workspacePath: string | null,
+) {
+  await runMcpAction(`preset:${preset}`, () => installMcpPreset(preset, workspacePath));
+}
+
+async function saveMcpServer(config: McpServerConfig) {
+  await runMcpAction(config.id, () => updateMcpServer(config));
+}
+
+async function removeMcpServer(serverId: string) {
+  await runMcpAction(serverId, () => deleteMcpServer(serverId));
+}
+
+async function startMcpServer(serverId: string) {
+  await runMcpAction(serverId, () => connectMcpServer(serverId));
+}
+
+async function stopMcpServer(serverId: string) {
+  await runMcpAction(serverId, () => disconnectMcpServer(serverId));
+}
+
+async function changeMcpToolPolicy(serverId: string, policy: McpToolPolicy) {
+  await runMcpAction(serverId, () => setMcpToolPolicy({ serverId, policy }));
+}
+
+async function changeMcpSystemSettings(settings: McpSystemSettings) {
+  await runMcpAction("__system__", () => updateMcpSystemSettings(settings));
+}
+
+async function refreshMcpCatalog(serverId: string) {
+  await runMcpAction(serverId, () => refreshMcpServer(serverId));
+}
+
+async function saveMcpAuth(serverId: string, secret: string) {
+  await runMcpAction(serverId, () => setMcpAuth(serverId, secret));
+}
+
+async function removeMcpAuth(serverId: string) {
+  await runMcpAction(serverId, () => clearMcpAuth(serverId));
+}
+
+async function startMcpOauth(serverId: string) {
+  busyMcpServerId.value = serverId;
+  error.value = null;
+  try {
+    mcpOauthStart.value = await beginMcpOAuth(serverId, "http://127.0.0.1:8765/callback");
+  } catch (cause) {
+    error.value = errorMessage(cause);
+  } finally {
+    busyMcpServerId.value = null;
+  }
+}
+
+async function finishMcpOauth(serverId: string, callbackUrl: string) {
+  await runMcpAction(serverId, () => completeMcpOAuth(serverId, callbackUrl));
+  mcpOauthStart.value = null;
+}
+
 function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : "The operation could not be completed";
 }
@@ -441,6 +546,9 @@ onMounted(loadWorkspace);
         :reloading-providers="isReloadingProviders"
         :saving-settings="isSavingSettings"
         :busy-provider-id="busyProviderId"
+        :mcp-catalog="mcpCatalog"
+        :busy-mcp-server-id="busyMcpServerId"
+        :mcp-oauth-start="mcpOauthStart"
         @close="openWorkspace"
         @reload-providers="reloadProviders"
         @create-provider="createProvider"
@@ -451,6 +559,19 @@ onMounted(loadWorkspace);
         @save-settings="saveSettings"
         @save-credential="saveCredential"
         @delete-credential="removeCredential"
+        @create-mcp-server="addMcpServer"
+        @install-mcp-preset="installPreset"
+        @update-mcp-server="saveMcpServer"
+        @delete-mcp-server="removeMcpServer"
+        @connect-mcp-server="startMcpServer"
+        @disconnect-mcp-server="stopMcpServer"
+        @refresh-mcp-server="refreshMcpCatalog"
+        @set-mcp-tool-policy="changeMcpToolPolicy"
+        @set-mcp-auth="saveMcpAuth"
+        @clear-mcp-auth="removeMcpAuth"
+        @begin-mcp-oauth="startMcpOauth"
+        @complete-mcp-oauth="finishMcpOauth"
+        @update-mcp-system-settings="changeMcpSystemSettings"
       />
 
       <header v-if="appView === 'workspace' && selectedConversation" class="conversation-header">

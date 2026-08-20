@@ -1,10 +1,10 @@
 # Carrot LLM 客户端设计与实施规划
 
-> 版本：v10
+> 版本：v12
 >
-> 更新日期：2026-08-19
+> 更新日期：2026-08-20
 >
-> 当前阶段：P4 本地 Agent 韧性功能已完成，发布签名与公证待发布环境执行
+> 当前阶段：P5-P6 macOS MCP 已完成，P7 待开始
 
 ## 1. 产品目标与确认边界
 
@@ -17,6 +17,8 @@ Carrot 是基于 Tauri、Rust、Diesel、Vue 和 TypeScript 的桌面 LLM 客户
 - 必须支持通过本地配置文件加载自定义 OpenAI-compatible Base URL；
 - 本地保存完整会话与 Agent 执行记录，并通过存储端口为网络存储预留实现；
 - 支持文件附件和图片输入；
+- P5-P6 优先支持 MCP Client，首轮只承诺 macOS，本地 stdio 优先于远程 HTTP 和危险工具；
+- MCP、工具目录和 Runtime 领域边界保留 Windows/Linux Adapter 能力，但 P5-P6 不以其他平台打包为验收项；
 - 跨设备同步首选局域网扫描、设备配对和点对点同步；
 - 暂不要求会话导出和应用层数据库加密；API Key 仍必须进入 OS 安全凭证存储，局域网同步必须加密传输。
 
@@ -29,9 +31,9 @@ Carrot 是基于 Tauri、Rust、Diesel、Vue 和 TypeScript 的桌面 LLM 客户
 5. 工具调用循环、最大步数、取消、串行与安全并行；
 6. 工具调用详情、token、耗时和错误审计；
 7. macOS 应用打包；
-8. 局域网设备发现、配对和会话同步的初始版本。
+8. macOS MCP Server 配置、工具发现、受控执行和审计的初始版本。
 
-MVP 不包含任意 shell/代码执行、多 Agent、RAG、云账户同步和完整 MCP。
+P0-P4 MVP 基线不包含任意 shell/代码执行、多 Agent、RAG、云账户同步和完整 MCP。P5-P6 将 MCP 作为 MVP 之后的最高优先级扩展；危险工具仍默认关闭，且阶段完成不等于支持 MCP 的全部 Client/Server 能力。
 
 ## 3. 从 AI Agent 设计提炼的约束
 
@@ -63,6 +65,11 @@ flowchart LR
     PROVIDER --> OPENAI["OpenAI Responses"]
     PROVIDER --> COMPAT["OpenAI-compatible"]
     AGENT --> TOOLS["Tool Registry and Executor"]
+    TOOLS --> MCP["MCP Tool Adapter"]
+    MCP --> MCPSTDIO["macOS stdio Server"]
+    MCP --> MCPHTTP["P6 Streamable HTTP"]
+    APP --> MCPCATALOG["MCP Manager and Tool Catalog"]
+    MCPCATALOG --> TOOLS
     APP --> STORE["ConversationStore"]
     STORE --> SQLITE["Diesel and SQLite"]
     STORE --> REMOTE["Future network store"]
@@ -81,6 +88,8 @@ Rust 持有 Provider 请求、密钥、工具权限、存储和同步；Vue 只�
 
 Rust 统一使用 Tokio 运行时，跨层异步端口使用 `async_trait`。阻塞型基础设施必须在 Adapter 内隔离，不能占用 Tokio worker；应用服务只依赖异步端口。
 
+MCP 是外部工具源，不建立第二套 Agent Runtime。MCP Server 发现的工具先转换为 Carrot 自有定义，经 Tool Catalog 校验和策略过滤后，在 Run 开始时形成不可变 Registry 快照；active Run 不受工具列表热更新影响。
+
 ## 5. Rust 模块
 
 ```text
@@ -93,6 +102,7 @@ src-tauri/src/
 ├── tools/          # registry、policy、executor
 ├── persistence/    # Diesel repositories 和 migrations
 ├── credentials/    # OS credential adapters
+├── mcp/            # MCP client、transport、tool adapter 和平台进程约束
 ├── sync/           # LAN discovery/transport adapters
 └── error.rs        # 稳定应用错误契约
 ```
@@ -149,6 +159,8 @@ lookup -> parse -> schema validate -> policy -> approval
 
 风险分级：`read_only`、`local_write`、`external_side_effect`、`dangerous`。MVP 自动执行低风险工具，写操作逐次授权，危险工具默认关闭。
 
+P5-P6 接入 MCP 后，外部工具还必须保存来源 Server、远端工具名、provider alias、Schema hash、定义快照和策略快照。MCP annotations 和工具名属于不可信提示，不能直接降低风险。取消、超时或断连后无法确认副作用结果的 MCP 调用进入 `recovery_required`，Server 重连不得自动重发。
+
 ## 8. 附件与图片输入
 
 附件处理分为四步：
@@ -189,11 +201,15 @@ P2 已采用第三方 Rust SDK `openai-oxide` 0.16 作为 OpenAI Responses Adapt
 
 `openai-oxide` 不作为原生 Gemini SDK。Gemini 的 OpenAI-compatible 网关只有在协议契约测试通过时才复用 compatible Adapter；未来直连 Gemini 原生 API 时实现独立 `GeminiProvider`，并在该阶段评估原生 SDK 或多 Provider SDK。无论采用何种 SDK，Agent Runtime 只看到 Carrot 自有的 Provider domain model。
 
+### MCP SDK 选型
+
+P5 采用官方 Rust SDK `rmcp 3.1.x`，关闭 default features，只启用 Client 和 stdio 子进程 transport；P6 再按需启用 Streamable HTTP Client 与 auth。`rmcp` 类型不得泄露到 domain、Agent Runtime、persistence model 或 IPC DTO。完整方案、特性边界和升级门禁见 [Carrot MCP 支持方案与实施计划](mcp-support-plan.md)。
+
 ## 10. Tauri IPC
 
 Command 负责请求/响应，P2 通过带 `run_id` 的 Tauri Event 转发 Provider 流；P3 durable Runtime 为 committed Event 引入单调 sequence 和 `chat_snapshot` 恢复。token delta 保持 transient，不占用数据库事务序号；最终消息与工具轨迹通过 Snapshot 对账。前端不得获得通用 SQL、任意 HTTP 代理、任意工具执行、密钥读取或任意路径访问接口。
 
-P1-P3 逐步加入：
+P1-P8 按对应阶段逐步加入：
 
 ```text
 conversation_list/create/get/rename/delete
@@ -206,6 +222,8 @@ tool_approval_resolve
 provider_profile_list/reload/test
 sync_peer_scan/pair/start/stop
 credential_set/delete
+mcp_server_list/create/update/delete/connect/disconnect/test
+mcp_tool_list/update_policy
 ```
 
 Rust DTO 是 IPC 真相源，通过 Tauri Specta 生成 `src/bindings.ts`。所有 durable 事件包含 `run_id` 与单调递增 `seq`；transient 流事件只负责即时显示。前端在加载和终态后获取后端快照，不猜测丢失内容。
@@ -222,9 +240,11 @@ src/
 └── bindings.ts   # Rust 生成
 ```
 
-主要界面包括会话列表、消息轨迹、附件预览、输入区、工具调用详情、审批弹窗、Provider 设置和局域网设备页。Markdown 禁止原始 HTML，外链经过协议白名单。
+主要界面包括会话列表、消息轨迹、附件预览、输入区、工具调用详情、审批弹窗、Provider 设置、MCP Server/工具管理和后续局域网设备页。MCP 管理界面必须明确显示 Server 来源、连接状态、暴露给模型的工具及其风险。Markdown 禁止原始 HTML，外链经过协议白名单。
 
 ## 12. 局域网同步设计
+
+局域网同步由原 P5 顺延到 P7，优先级低于 P5-P6 macOS MCP 支持。MCP Server 配置、credential、连接状态和 active Run lease 默认不参与同步；未来若同步工具执行历史，只同步已提交快照和审计记录，不能在另一设备重放副作用。
 
 局域网同步不是“扫描到即同步”。至少包含：
 
@@ -249,6 +269,11 @@ src/
 - 副作用工具使用 idempotency key，未知结果不盲重试；
 - 局域网设备必须配对、加密和可撤销；
 - Tauri capabilities 按阶段以最小权限增加。
+- MCP Server、工具 annotations、描述和输出默认不可信；新 Server 和新工具默认不暴露给模型；
+- stdio Server 使用显式 executable/args，不通过 shell 解释整段 command，不自动安装远程包；
+- 参数路径检查只作为纵深防御，不能替代 MCP Server 进程权限约束；
+- MCP HTTP credential 只发送到其绑定的资源 Server，禁止 query token 和不受控重定向；
+- MCP 工具定义、Schema 和策略形成 Run 级快照，配置变化不得复用旧审批；
 
 ## 14. 测试与验收
 
@@ -260,21 +285,27 @@ Rust 单元测试覆盖 SSE 分片、Schema、call/output 关联、状态机、�
 
 同步测试还需覆盖配对拒绝、中间人失败、冲突合并、断点续传、重复 Item 与设备撤销。
 
+MCP 测试必须覆盖配置校验、协议协商、分页发现、alias 碰撞、JSON Schema dialect、输入和输出校验、mixed content、Server crash、stderr 洪泛、调用超时、取消、结果未知、工具列表变化及恢复时 Schema/Server 缺失。集成测试使用仓库内 Fake MCP Server，不得依赖公网、`npx`、`uvx` 或用户机器已安装的第三方 Server。P5-P6 发布验收只要求 macOS；跨平台共享逻辑仍必须通过 Rust 单元和契约测试。
+
 ## 15. 实施阶段
 
-| 阶段 | 内容                                                                      | 状态   |
-| ---- | ------------------------------------------------------------------------- | ------ |
-| P0   | 工程、分层、类型安全 IPC、质量门禁、ADR                                   | 已完成 |
-| P1   | 异步 Diesel/SQLite、可恢复 Schema、模型转换、会话 CRUD、Provider 配置加载 | 已完成 |
-| P2   | 设置中心、Keychain、`openai-oxide` Responses、SSE、取消树、附件/图片      | 已完成 |
-| P3   | 工具 Registry/Executor、统一 Run 引擎、混合模式、事件与审计 UI            | 已完成 |
-| P4   | 审批、安全、持久化输入队列、暂停/恢复、崩溃恢复、macOS 打包加固           | 已完成 |
-| P5   | 局域网发现、配对、加密同步与冲突处理                                      | 待开始 |
-| P6   | Windows/Linux 打包、MCP、网络存储和其他扩展                               | 待开始 |
+| 阶段 | 内容                                                                        | 状态   |
+| ---- | --------------------------------------------------------------------------- | ------ |
+| P0   | 工程、分层、类型安全 IPC、质量门禁、ADR                                     | 已完成 |
+| P1   | 异步 Diesel/SQLite、可恢复 Schema、模型转换、会话 CRUD、Provider 配置加载   | 已完成 |
+| P2   | 设置中心、Keychain、`openai-oxide` Responses、SSE、取消树、附件/图片        | 已完成 |
+| P3   | 工具 Registry/Executor、统一 Run 引擎、混合模式、事件与审计 UI              | 已完成 |
+| P4   | 审批、安全、持久化输入队列、暂停/恢复、崩溃恢复、macOS 打包加固             | 已完成 |
+| P5   | macOS 本地 MCP：stdio、配置/生命周期、Tool Catalog、只读执行、治理与管理 UI | 已完成 |
+| P6   | macOS MCP 扩展：受控写入/脚本、Streamable HTTP/OAuth、动态更新与生产加固    | 已完成 |
+| P7   | 局域网发现、配对、加密同步与冲突处理                                        | 待开始 |
+| P8   | Windows/Linux 平台 Adapter 与打包、网络存储和其他扩展                       | 待开始 |
 
 每个阶段完成后更新独立阶段报告，记录交付物、验证命令、遗留风险和下一阶段计划。
 
-P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。P2 阶段结论见 [Phase 2 Provider Runtime 报告](phase-2-provider-runtime.md)，P3 结论见 [P3 Durable Agent Runtime 阶段报告](phase-3-durable-agent-runtime.md)。P4 交互与恢复切片见 [P4 会话体验与运行控制切片](phase-4-chat-experience.md)、[P4 主题、推理摘要与运行恢复切片](phase-4-appearance-and-reasoning.md)，最终收口见 [P4 韧性、审批与 macOS 加固报告](phase-4-resilience-and-macos.md)，Markdown 阅读体验与 Xcode 调试入口见 [P4 Markdown 会话体验与 Xcode 调试补充](phase-4-markdown-and-xcode.md)，并发会话与失败上下文修复见 [P4 多会话与 Provider 失败恢复补充](phase-4-multiconversation-and-provider-recovery.md)。当前已落地完整 inbox 分支消费、附件持久化、高风险审批、业务幂等键、人工 reconcile、生命周期故障恢复、多主题并行会话、失败上下文隔离、Markdown 安全预览、Xcode 本地调试和 macOS bundle 加固；Developer ID 签名与 Apple 公证由发布环境门禁完成。
+P5-P6 只承诺 macOS 产品交付。共享领域模型、`AgentTool`/Tool Catalog、配置格式、持久化契约和 MCP 协议测试保持平台无关；子进程隔离、凭证、路径授权、应用生命周期与打包通过平台 Adapter 承载。详细切片、完成门禁和回滚边界见 [Carrot MCP 支持方案与实施计划](mcp-support-plan.md)。
+
+P1 阶段结论见 [Phase 1 本地持久化与会话工作区报告](phase-1-local-persistence.md)。P2 阶段结论见 [Phase 2 Provider Runtime 报告](phase-2-provider-runtime.md)，P3 结论见 [P3 Durable Agent Runtime 阶段报告](phase-3-durable-agent-runtime.md)。P4 交互与恢复切片见 [P4 会话体验与运行控制切片](phase-4-chat-experience.md)、[P4 主题、推理摘要与运行恢复切片](phase-4-appearance-and-reasoning.md)，最终收口见 [P4 韧性、审批与 macOS 加固报告](phase-4-resilience-and-macos.md)，Markdown 阅读体验与 Xcode 调试入口见 [P4 Markdown 会话体验与 Xcode 调试补充](phase-4-markdown-and-xcode.md)，并发会话与失败上下文修复见 [P4 多会话与 Provider 失败恢复补充](phase-4-multiconversation-and-provider-recovery.md)。P5 结论见 [P5 macOS 本地 MCP 阶段报告](phase-5-macos-mcp.md)，P6 结论见 [P6 macOS MCP 扩展阶段报告](phase-6-macos-mcp-extension.md)。当前已落地本地 stdio 与 Streamable HTTP/OAuth、版本化配置与生命周期、动态 Tool Catalog、受控危险工具、Run/执行级工具快照、管理 UI 及仓库内协议 fixture；Developer ID 签名与 Apple 公证仍由发布环境门禁完成。
 
 桌面平台入口采用 [Tauri 多平台壳工程布局](platform-shell-layout.md)：共享可执行壳保留在 `src-tauri`，Xcode、后续 Visual Studio 辅助入口及平台打包资产统一放入 `platforms/<os>`；Tauri 自动发现的 `tauri.<os>.conf.json` 作为薄入口继续位于 `src-tauri`。
 
@@ -309,4 +340,8 @@ Agent 模式、检查点、副作用恢复、运行中追加消息及暂停/继�
 - [Diesel：Getting Started](https://diesel.rs/guides/getting-started.html)
 - [diesel-async](https://docs.rs/diesel-async/0.9.2/diesel_async/)
 - [openai-oxide](https://github.com/fortunto2/openai-oxide)
+- [MCP 官方 Rust SDK](https://github.com/modelcontextprotocol/rust-sdk)
+- [MCP 2026-07-28 Tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)
+- [MCP 2026-07-28 Transports](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)
+- [MCP 2026-07-28 Authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)
 - [Vue：TypeScript with Composition API](https://vuejs.org/guide/typescript/composition-api)

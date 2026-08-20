@@ -51,6 +51,8 @@ impl RunStore for SqliteRunStore {
         let now = now_ms()?;
         let provider_snapshot_json =
             serde_json::to_string(&input.provider_profile).map_err(invalid_serialization)?;
+        let tool_catalog_snapshot_json =
+            serde_json::to_string(&input.tool_catalog_snapshot).map_err(invalid_serialization)?;
         let user_content_json =
             serde_json::to_string(&input.user_content).map_err(invalid_serialization)?;
         let started_payload = serde_json::json!({
@@ -89,6 +91,7 @@ impl RunStore for SqliteRunStore {
             created_at_ms: now,
             updated_at_ms: now,
             completed_at_ms: None,
+            tool_catalog_snapshot_json: &tool_catalog_snapshot_json,
         };
         let item_row = NewRunItemRow {
             id: &item_id,
@@ -544,6 +547,79 @@ impl RunStore for SqliteRunStore {
     ) -> Result<CommitResult, StoreError> {
         self.finish_tool_transaction(run_id, execution_id, call_id, result)
             .await
+    }
+
+    async fn mark_tool_outcome_unknown(
+        &self,
+        run_id: &str,
+        execution_id: &str,
+        reason: &str,
+    ) -> Result<RunEvent, StoreError> {
+        let now = now_ms()?;
+        let event_id = Uuid::now_v7().to_string();
+        let payload = serde_json::json!({
+            "toolExecutionId": execution_id,
+            "reason": reason,
+        });
+        let payload_json = payload.to_string();
+        let mut connection = self.database.connection().await.map_err(unavailable)?;
+        let event_seq = connection
+            .transaction::<_, diesel::result::Error, _>(async |connection| {
+                let row = runs::table
+                    .filter(runs::id.eq(run_id))
+                    .select(RunRow::as_select())
+                    .first::<RunRow>(connection)
+                    .await?;
+                let updated = diesel::update(
+                    tool_executions::table
+                        .filter(tool_executions::id.eq(execution_id))
+                        .filter(tool_executions::run_id.eq(run_id))
+                        .filter(tool_executions::status.eq("executing")),
+                )
+                .set((
+                    tool_executions::reconciliation_status.eq("pending"),
+                    tool_executions::reconciliation_note.eq(Some(reason)),
+                    tool_executions::error_message.eq(Some(reason)),
+                ))
+                .execute(connection)
+                .await?;
+                if updated != 1 {
+                    return Err(diesel::result::Error::RollbackTransaction);
+                }
+                let event_seq = row.last_event_seq + 1;
+                diesel::insert_into(run_events::table)
+                    .values(NewRunEventRow {
+                        id: &event_id,
+                        run_id,
+                        seq: event_seq,
+                        kind: "tool_reconciliation_required",
+                        payload_json: &payload_json,
+                        persisted_at_ms: now,
+                    })
+                    .execute(connection)
+                    .await?;
+                update_run_state(
+                    connection,
+                    &row,
+                    event_seq,
+                    "recovery_required",
+                    "none",
+                    Some(reason),
+                    now,
+                )
+                .await?;
+                Ok(event_seq)
+            })
+            .await
+            .map_err(transaction_error)?;
+        Ok(RunEvent {
+            id: event_id,
+            run_id: run_id.to_owned(),
+            seq: event_seq,
+            kind: "tool_reconciliation_required".to_owned(),
+            payload,
+            persisted_at_ms: now,
+        })
     }
 
     async fn create_plan(&self, run_id: &str, plan: PlanDraft) -> Result<RunEvent, StoreError> {
@@ -1493,6 +1569,10 @@ impl SqliteRunStore {
         let event_id = Uuid::now_v7().to_string();
         let arguments_json =
             serde_json::to_string(&execution.arguments).map_err(invalid_serialization)?;
+        let definition_snapshot_json =
+            serde_json::to_string(&execution.definition_snapshot).map_err(invalid_serialization)?;
+        let policy_snapshot_json =
+            serde_json::to_string(&execution.policy_snapshot).map_err(invalid_serialization)?;
         let payload = serde_json::json!({
             "toolExecutionId": execution.id,
             "callId": execution.call_id,
@@ -1526,6 +1606,7 @@ impl SqliteRunStore {
                         risk: &execution.risk,
                         arguments_json: &arguments_json,
                         arguments_hash: &execution.arguments_hash,
+                        approval_preview: execution.approval_preview.as_deref(),
                         output_json: None,
                         error_message: None,
                         retryable: execution.retryable,
@@ -1535,6 +1616,12 @@ impl SqliteRunStore {
                         idempotency_key: execution.idempotency_key.as_deref(),
                         reconciliation_status: "not_required",
                         reconciliation_note: None,
+                        source_kind: &execution.identity.source_kind,
+                        source_server_id: execution.identity.source_server_id.as_deref(),
+                        remote_tool_name: execution.identity.remote_tool_name.as_deref(),
+                        tool_schema_hash: &execution.identity.schema_hash,
+                        tool_definition_snapshot_json: &definition_snapshot_json,
+                        tool_policy_snapshot_json: &policy_snapshot_json,
                     })
                     .execute(connection)
                     .await?;
@@ -2116,8 +2203,27 @@ mod tests {
                     risk: "external_side_effect".to_owned(),
                     arguments: serde_json::json!({"message": "hello"}),
                     arguments_hash: "hash".to_owned(),
+                    approval_preview: None,
                     retryable: false,
                     idempotency_key: Some("send_message:hash".to_owned()),
+                    identity: crate::tools::ToolIdentity {
+                        source_kind: "built_in".to_owned(),
+                        source_server_id: None,
+                        remote_tool_name: None,
+                        schema_hash: "schema".to_owned(),
+                    },
+                    definition_snapshot: crate::providers::runtime::ToolDefinition {
+                        name: "send_message".to_owned(),
+                        description: "test".to_owned(),
+                        parameters: serde_json::json!({"type": "object"}),
+                        strict: true,
+                    },
+                    policy_snapshot: crate::tools::ToolCapabilities {
+                        risk: crate::tools::ToolRisk::ExternalSideEffect,
+                        idempotent: false,
+                        cancellable: true,
+                        reconcile: false,
+                    },
                 },
             )
             .await
@@ -2316,8 +2422,29 @@ mod tests {
                     risk: "dangerous".to_owned(),
                     arguments: serde_json::json!({"path": "report.txt"}),
                     arguments_hash: "write-hash".to_owned(),
+                    approval_preview: Some(
+                        "--- a/report.txt\n+++ b/report.txt\n+approved\n".to_owned(),
+                    ),
                     retryable: true,
                     idempotency_key: Some("write_file:report-v1".to_owned()),
+                    identity: crate::tools::ToolIdentity {
+                        source_kind: "built_in".to_owned(),
+                        source_server_id: None,
+                        remote_tool_name: None,
+                        schema_hash: "schema".to_owned(),
+                    },
+                    definition_snapshot: crate::providers::runtime::ToolDefinition {
+                        name: "write_file".to_owned(),
+                        description: "test".to_owned(),
+                        parameters: serde_json::json!({"type": "object"}),
+                        strict: true,
+                    },
+                    policy_snapshot: crate::tools::ToolCapabilities {
+                        risk: crate::tools::ToolRisk::Dangerous,
+                        idempotent: true,
+                        cancellable: true,
+                        reconcile: true,
+                    },
                 },
             )
             .await
@@ -2328,6 +2455,12 @@ mod tests {
             .unwrap();
         let snapshot = store.snapshot(&conversation_id).await.unwrap();
         assert_eq!(snapshot.approvals[0].status, "pending");
+        assert!(
+            snapshot.tool_executions[0]
+                .approval_preview
+                .as_deref()
+                .is_some_and(|preview| preview.contains("+approved"))
+        );
         assert_eq!(
             snapshot.active_run.unwrap().status,
             RunStatus::WaitingForApproval
@@ -2456,6 +2589,7 @@ mod tests {
                 "role": "user",
                 "content": [{"type": "text", "text": "Hello"}],
             }),
+            tool_catalog_snapshot: Vec::new(),
         }
     }
 }

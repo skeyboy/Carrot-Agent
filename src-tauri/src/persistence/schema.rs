@@ -44,6 +44,7 @@ diesel::table! {
         created_at_ms -> BigInt,
         updated_at_ms -> BigInt,
         completed_at_ms -> Nullable<BigInt>,
+        tool_catalog_snapshot_json -> Text,
     }
 }
 
@@ -96,6 +97,7 @@ diesel::table! {
         risk -> Text,
         arguments_json -> Text,
         arguments_hash -> Text,
+        approval_preview -> Nullable<Text>,
         output_json -> Nullable<Text>,
         error_message -> Nullable<Text>,
         retryable -> Bool,
@@ -105,6 +107,12 @@ diesel::table! {
         idempotency_key -> Nullable<Text>,
         reconciliation_status -> Text,
         reconciliation_note -> Nullable<Text>,
+        source_kind -> Text,
+        source_server_id -> Nullable<Text>,
+        remote_tool_name -> Nullable<Text>,
+        tool_schema_hash -> Text,
+        tool_definition_snapshot_json -> Text,
+        tool_policy_snapshot_json -> Text,
     }
 }
 

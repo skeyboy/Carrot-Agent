@@ -2,7 +2,7 @@
 
 Carrot is a macOS-first desktop LLM client built with Tauri 2, Rust, Vue 3, and TypeScript. The architecture keeps provider calls, credentials, tools, persistence, and synchronization behind Rust-side ports while the WebView remains a typed presentation layer.
 
-Current milestone: P4 local Agent resilience is complete. Carrot supports OpenAI Responses and Chat Completions compatible adapters, durable Run/Item/Event history, a bounded ReAct tool loop, transactional pause and same-run resume, append/fork/cancel-and-replace inbox consumption with image attachments, lease takeover, high-risk tool approval, idempotency keys, manual side-effect reconciliation, lifecycle checkpoints, adaptive themes, and hardened macOS bundle configuration. Developer ID signing and Apple notarization remain release-environment gates.
+Current milestone: P5-P6 macOS MCP support is complete. Carrot supports OpenAI Responses and Chat Completions compatible adapters, durable Run/Item/Event history, a bounded ReAct tool loop, transactional pause and same-run resume, curated Filesystem and Brave Search MCP presets, local stdio and Streamable HTTP/OAuth lifecycle management, workspace and domain policies, diff-backed write approval, a governed Tool Catalog, immutable run/tool snapshots, adaptive themes, and hardened macOS bundle configuration. Developer ID signing and Apple notarization remain release-environment gates.
 
 ## Requirements
 
@@ -28,7 +28,12 @@ For native macOS debugging, open `platforms/macos/Carrot.xcodeproj` and use the 
 
 ## Documentation
 
+Live MCP and third-party acceptance steps are documented in
+[`docs/mcp-production-acceptance.md`](docs/mcp-production-acceptance.md).
+
 - [System design and implementation plan](docs/llm-client-design-plan.md)
+- [macOS-first MCP support plan](docs/mcp-support-plan.md)
+- [Phase 5 macOS local MCP report](docs/phase-5-macos-mcp.md)
 - [Tauri multi-platform shell layout](docs/platform-shell-layout.md)
 - [Conversation scroll ownership and Markdown copy](docs/conversation-scroll-and-markdown-copy.md)
 - [Agent modes and resilient session runtime](docs/agent-runtime-modes-and-resilience.md)

@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Database,
   Info,
+  Cable,
   Palette,
   Server,
   SlidersHorizontal,
@@ -15,18 +16,25 @@ import type {
   CreateProviderProfileRequest,
   CredentialStatusDto,
   HealthStatus,
+  McpCatalogSnapshot,
+  McpOAuthStart,
+  McpServerConfig,
+  McpSystemSettings,
+  McpToolPolicy,
   ProviderProfilesDto,
   SettingsSnapshotDto,
   UpdateProviderProfileRequest,
 } from "../../bindings";
 import AboutSettings from "./AboutSettings.vue";
+import McpSettings from "./McpSettings.vue";
 import AppearanceSettings from "./AppearanceSettings.vue";
 import ProviderSettings from "./ProviderSettings.vue";
 import RuntimeSettings from "./RuntimeSettings.vue";
 import StorageSettings from "./StorageSettings.vue";
 import SyncSettings from "./SyncSettings.vue";
 
-export type SettingsSection = "providers" | "appearance" | "runtime" | "storage" | "sync" | "about";
+export type SettingsSection =
+  "providers" | "mcp" | "appearance" | "runtime" | "storage" | "sync" | "about";
 
 const props = defineProps<{
   initialSection: SettingsSection;
@@ -37,6 +45,9 @@ const props = defineProps<{
   reloadingProviders: boolean;
   savingSettings: boolean;
   busyProviderId: string | null;
+  mcpCatalog: McpCatalogSnapshot | null;
+  busyMcpServerId: string | null;
+  mcpOauthStart: McpOAuthStart | null;
 }>();
 const emit = defineEmits<{
   close: [];
@@ -49,6 +60,19 @@ const emit = defineEmits<{
   saveSettings: [settings: AppSettings];
   saveCredential: [providerId: string, secret: string];
   deleteCredential: [providerId: string];
+  createMcpServer: [config: McpServerConfig];
+  installMcpPreset: [preset: "workspace_filesystem" | "brave_search", workspacePath: string | null];
+  updateMcpServer: [config: McpServerConfig];
+  deleteMcpServer: [serverId: string];
+  connectMcpServer: [serverId: string];
+  disconnectMcpServer: [serverId: string];
+  refreshMcpServer: [serverId: string];
+  setMcpToolPolicy: [serverId: string, policy: McpToolPolicy];
+  setMcpAuth: [serverId: string, secret: string];
+  clearMcpAuth: [serverId: string];
+  beginMcpOauth: [serverId: string];
+  completeMcpOauth: [serverId: string, callbackUrl: string];
+  updateMcpSystemSettings: [settings: McpSystemSettings];
 }>();
 
 const section = ref<SettingsSection>(props.initialSection);
@@ -68,6 +92,10 @@ watch(
 
 function forwardCredential(providerId: string, secret: string) {
   emit("saveCredential", providerId, secret);
+}
+
+function forwardToolPolicy(serverId: string, policy: McpToolPolicy) {
+  emit("setMcpToolPolicy", serverId, policy);
 }
 
 function saveDraft() {
@@ -95,6 +123,9 @@ function saveDraft() {
     </header>
     <div class="settings-layout">
       <nav class="settings-nav" aria-label="Settings sections">
+        <button :class="{ selected: section === 'mcp' }" type="button" @click="section = 'mcp'">
+          <Cable :size="16" /> Local MCP
+        </button>
         <button
           :class="{ selected: section === 'providers' }"
           type="button"
@@ -151,6 +182,27 @@ function saveDraft() {
           v-model="draft"
           :saving="savingSettings"
           @save="saveDraft"
+        />
+        <McpSettings
+          v-else-if="section === 'mcp'"
+          :catalog="mcpCatalog"
+          :busy-server-id="busyMcpServerId"
+          :oauth-start="mcpOauthStart"
+          @create="emit('createMcpServer', $event)"
+          @install-preset="(preset, path) => emit('installMcpPreset', preset, path)"
+          @update="emit('updateMcpServer', $event)"
+          @delete="emit('deleteMcpServer', $event)"
+          @connect="emit('connectMcpServer', $event)"
+          @disconnect="emit('disconnectMcpServer', $event)"
+          @refresh="emit('refreshMcpServer', $event)"
+          @tool-policy="forwardToolPolicy"
+          @set-auth="(serverId, secret) => emit('setMcpAuth', serverId, secret)"
+          @clear-auth="emit('clearMcpAuth', $event)"
+          @oauth-begin="emit('beginMcpOauth', $event)"
+          @oauth-complete="
+            (serverId, callbackUrl) => emit('completeMcpOauth', serverId, callbackUrl)
+          "
+          @system-settings="emit('updateMcpSystemSettings', $event)"
         />
         <AppearanceSettings
           v-else-if="section === 'appearance' && draft"

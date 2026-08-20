@@ -22,11 +22,14 @@ async-trait = "0.1"
 base64 = "0.22"
 futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+jsonschema = { version = "0.49", default-features = false }
 diesel = { version = "2.3", features = ["sqlite"] }
 diesel-async = { version = "0.9", features = ["deadpool", "migrations", "sqlite"] }
 diesel_migrations = "2.3"
 libsqlite3-sys = { version = "0.38", features = ["bundled"] }
 openai-oxide = { version = "0.16", default-features = false, features = ["chat", "models", "responses"] }
+rmcp = { version = "3.1", default-features = false, features = ["auth", "client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2.7"
 serde = { version = "1", features = ["derive"] }
@@ -36,6 +39,7 @@ specta-typescript = "=0.0.12"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 thiserror = "2"
 sha2 = "0.10"
+similar = "2"
 tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
 tokio-util = "0.7"
 toml = "1"
@@ -46,4 +50,5 @@ uuid = { version = "1", features = ["serde", "v7"] }
 keyring = "4.1"
 
 [dev-dependencies]
+axum = "0.8"
 tempfile = "3"

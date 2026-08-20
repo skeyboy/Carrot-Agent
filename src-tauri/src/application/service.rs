@@ -18,6 +18,7 @@ use crate::domain::run::{PendingInput, PendingInputIntent, RecoveryResolution};
 use crate::domain::settings::AppSettings;
 use crate::domain::storage::{ConversationStore, RunStore};
 use crate::error::AppError;
+use crate::mcp::{McpClientManager, McpConfigStore};
 use crate::persistence::{
     Database, SqliteAttachmentStore, SqliteConversationStore, SqliteRunStore,
 };
@@ -25,7 +26,6 @@ use crate::providers::runtime::{ImageDetail, MessageContent, MessageRole, Provid
 use crate::providers::{LlmProvider, OpenAiChatProvider, OpenAiResponsesProvider, ProviderEvent};
 use crate::providers::{OpenAiModelCatalog, ProviderConfigLoader};
 use crate::settings::SettingsStore;
-use crate::tools::ToolRegistry;
 
 pub struct CarrotService {
     conversations: Arc<dyn ConversationStore>,
@@ -35,6 +35,7 @@ pub struct CarrotService {
     provider_loader: ProviderConfigLoader,
     providers: RwLock<ProviderCatalog>,
     settings: SettingsStore,
+    mcp: Arc<McpClientManager>,
     database_path: PathBuf,
     attachment_path: PathBuf,
     cancellation: CancellationTree,
@@ -48,6 +49,7 @@ impl CarrotService {
         settings_path: PathBuf,
         attachment_path: PathBuf,
     ) -> Result<Self, AppError> {
+        let mcp_config_path = settings_path.with_file_name("mcp-servers.toml");
         let database = Database::connect(&database_path)
             .await
             .map_err(AppError::from)?;
@@ -64,15 +66,20 @@ impl CarrotService {
             .await
             .map_err(AppError::from)?;
         let runs: Arc<dyn RunStore> = Arc::new(run_store);
+        let credentials: Arc<dyn CredentialStore> = Arc::new(SystemCredentialStore);
+        let mcp =
+            McpClientManager::initialize(McpConfigStore::new(mcp_config_path), credentials.clone())
+                .await?;
 
         Ok(Self {
             conversations: Arc::new(SqliteConversationStore::new(database.clone())),
             runs,
             attachments: SqliteAttachmentStore::new(database),
-            credentials: Arc::new(SystemCredentialStore),
+            credentials,
             provider_loader,
             providers: RwLock::new(providers),
             settings,
+            mcp,
             database_path,
             attachment_path,
             cancellation: CancellationTree::default(),
@@ -357,6 +364,126 @@ impl CarrotService {
         self.settings.update(settings).await.map_err(AppError::from)
     }
 
+    pub async fn mcp_snapshot(&self) -> crate::domain::mcp::McpCatalogSnapshot {
+        self.mcp.snapshot().await
+    }
+
+    pub async fn update_mcp_system_settings(
+        &self,
+        settings: crate::domain::mcp::McpSystemSettings,
+    ) -> Result<crate::domain::mcp::McpCatalogSnapshot, AppError> {
+        self.mcp
+            .update_system_settings(settings)
+            .await
+            .map_err(AppError::from)
+    }
+
+    pub async fn create_mcp_server(
+        &self,
+        config: crate::domain::mcp::McpServerConfig,
+    ) -> Result<crate::domain::mcp::McpCatalogSnapshot, AppError> {
+        self.mcp.create_server(config).await.map_err(AppError::from)
+    }
+
+    pub async fn install_mcp_preset(
+        &self,
+        preset: crate::domain::mcp::McpPresetKind,
+        workspace_path: Option<String>,
+    ) -> Result<crate::domain::mcp::McpCatalogSnapshot, AppError> {
+        self.mcp
+            .install_preset(preset, workspace_path)
+            .await
+            .map_err(AppError::from)
+    }
+
+    pub async fn update_mcp_server(
+        &self,
+        config: crate::domain::mcp::McpServerConfig,
+    ) -> Result<crate::domain::mcp::McpCatalogSnapshot, AppError> {
+        self.mcp.update_server(config).await.map_err(AppError::from)
+    }
+
+    pub async fn delete_mcp_server(
+        &self,
+        id: &str,
+    ) -> Result<crate::domain::mcp::McpCatalogSnapshot, AppError> {
+        self.mcp.delete_server(id).await.map_err(AppError::from)
+    }
+
+    pub async fn connect_mcp_server(
+        &self,
+        id: &str,
+    ) -> Result<crate::domain::mcp::McpCatalogSnapshot, AppError> {
+        self.mcp.connect(id).await?;
+        Ok(self.mcp.snapshot().await)
+    }
+
+    pub async fn disconnect_mcp_server(
+        &self,
+        id: &str,
+    ) -> Result<crate::domain::mcp::McpCatalogSnapshot, AppError> {
+        self.mcp.disconnect(id).await?;
+        Ok(self.mcp.snapshot().await)
+    }
+
+    pub async fn set_mcp_tool_policy(
+        &self,
+        server_id: &str,
+        policy: crate::domain::mcp::McpToolPolicy,
+    ) -> Result<crate::domain::mcp::McpCatalogSnapshot, AppError> {
+        self.mcp
+            .set_tool_policy(server_id, policy)
+            .await
+            .map_err(AppError::from)
+    }
+
+    pub async fn set_mcp_auth(
+        &self,
+        server_id: &str,
+        secret: String,
+    ) -> Result<crate::domain::mcp::McpCatalogSnapshot, AppError> {
+        self.mcp.set_auth_secret(server_id, secret).await?;
+        Ok(self.mcp.snapshot().await)
+    }
+
+    pub async fn clear_mcp_auth(
+        &self,
+        server_id: &str,
+    ) -> Result<crate::domain::mcp::McpCatalogSnapshot, AppError> {
+        self.mcp.clear_auth(server_id).await?;
+        Ok(self.mcp.snapshot().await)
+    }
+
+    pub async fn refresh_mcp_server(
+        &self,
+        server_id: &str,
+    ) -> Result<crate::domain::mcp::McpCatalogSnapshot, AppError> {
+        self.mcp.refresh_server_tools(server_id).await?;
+        Ok(self.mcp.snapshot().await)
+    }
+
+    pub async fn begin_mcp_oauth(
+        &self,
+        server_id: &str,
+        redirect_uri: String,
+    ) -> Result<crate::domain::mcp::McpOAuthStart, AppError> {
+        self.mcp
+            .begin_oauth(server_id, redirect_uri)
+            .await
+            .map_err(AppError::from)
+    }
+
+    pub async fn complete_mcp_oauth(
+        &self,
+        server_id: &str,
+        callback_url: String,
+    ) -> Result<crate::domain::mcp::McpCatalogSnapshot, AppError> {
+        self.mcp
+            .complete_oauth(server_id, callback_url)
+            .await
+            .map_err(AppError::from)
+    }
+
     pub fn settings_path(&self) -> String {
         self.settings.path().display().to_string()
     }
@@ -538,7 +665,7 @@ impl CarrotService {
             self.runtime_instance_id.clone(),
         );
         let settings = self.settings().await;
-        let runtime = AgentRuntime::new(self.runs.clone(), ToolRegistry::built_in());
+        let runtime = AgentRuntime::new(self.runs.clone(), self.mcp.tool_registry().await);
         let input = RuntimeInput {
             run_id: run_id.clone(),
             conversation_id,
@@ -624,7 +751,12 @@ impl CarrotService {
         for run_id in run_ids {
             self.cancellation.pause_run(&run_id).await;
         }
+        self.mcp.disconnect_all().await;
         Ok(())
+    }
+
+    pub async fn resume_from_suspend(&self) {
+        self.mcp.reconnect_enabled().await;
     }
 
     pub async fn pause_chat(&self, run_id: &str) -> Result<(), AppError> {
@@ -704,7 +836,7 @@ impl CarrotService {
             self.runtime_instance_id.clone(),
         );
         let settings = self.settings().await;
-        let runtime = AgentRuntime::new(self.runs.clone(), ToolRegistry::built_in());
+        let runtime = AgentRuntime::new(self.runs.clone(), self.mcp.tool_registry().await);
         let input = RuntimeInput {
             run_id: run_id.clone(),
             conversation_id: conversation_id.to_owned(),
@@ -786,7 +918,13 @@ impl CarrotService {
             self.runtime_instance_id.clone(),
         );
         let settings = self.settings().await;
-        let runtime = AgentRuntime::new(self.runs.clone(), ToolRegistry::built_in());
+        let current_registry = self.mcp.tool_registry().await;
+        let registry = if claimed.tool_catalog_snapshot.is_empty() {
+            current_registry
+        } else {
+            current_registry.retain_snapshot(&claimed.tool_catalog_snapshot)
+        };
+        let runtime = AgentRuntime::new(self.runs.clone(), registry);
         let input = RuntimeInput {
             run_id: run_id.clone(),
             conversation_id: claimed.conversation_id.clone(),

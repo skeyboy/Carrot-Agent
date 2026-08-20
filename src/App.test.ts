@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App.vue";
 import { resetSettingsPreview } from "./api/settings";
+import { resetMcpPreview } from "./api/mcp";
 import { resetWorkspacePreview } from "./api/workspace";
 
 describe("App", () => {
@@ -10,6 +11,7 @@ describe("App", () => {
     sessionStorage.clear();
     resetWorkspacePreview();
     resetSettingsPreview();
+    resetMcpPreview();
   });
 
   it("offers same-run resume for an interrupted lease", async () => {
@@ -136,6 +138,54 @@ describe("App", () => {
     expect(wrapper.get('[aria-label="Application theme"] [aria-checked="true"]').text()).toContain(
       "Dark",
     );
+  });
+
+  it("governs local MCP server lifecycle and read-only tools", async () => {
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get(".sidebar-footer-row").trigger("click");
+    const mcp = wrapper
+      .findAll(".settings-nav button")
+      .find((button) => button.text().includes("Local MCP"));
+    expect(mcp).toBeTruthy();
+    await mcp!.trigger("click");
+
+    const systemPanel = wrapper.get(".mcp-system-panel");
+    const systemSwitches = systemPanel.findAll('input[role="switch"]');
+    expect(systemSwitches).toHaveLength(7);
+    expect(
+      systemSwitches.slice(0, 6).every((item) => (item.element as HTMLInputElement).checked),
+    ).toBe(true);
+    expect((systemSwitches[6]!.element as HTMLInputElement).checked).toBe(false);
+    expect(systemSwitches.slice(4).every((item) => item.attributes("disabled") !== undefined)).toBe(
+      true,
+    );
+    await systemSwitches[0]!.setValue(false);
+    await flushPromises();
+    expect(
+      (wrapper.get('.mcp-system-panel input[role="switch"]').element as HTMLInputElement).checked,
+    ).toBe(false);
+    const presets = wrapper.findAll(".mcp-preset");
+    expect(presets).toHaveLength(2);
+    expect(presets[0]!.text()).toContain("Workspace Files");
+    expect(presets[1]!.text()).toContain("Brave Search");
+
+    const serverPanel = wrapper.get(".mcp-server-panel:not(.mcp-system-panel)");
+    expect(serverPanel.text()).toContain("Workspace Files");
+    const firstTool = wrapper.get('.mcp-tool-row input[type="checkbox"]');
+    expect((firstTool.element as HTMLInputElement).checked).toBe(true);
+    await firstTool.setValue(false);
+    await flushPromises();
+    expect(
+      (wrapper.get('.mcp-tool-row input[type="checkbox"]').element as HTMLInputElement).checked,
+    ).toBe(false);
+
+    await wrapper.get('[title="Disconnect server"]').trigger("click");
+    await flushPromises();
+    expect(serverPanel.get(".mcp-server-identity").text()).toContain("disconnected");
+    await wrapper.get('[title="Connect server"]').trigger("click");
+    await flushPromises();
+    expect(serverPanel.get(".mcp-server-identity").text()).toContain("ready");
   });
 
   it("renders streaming events inside the conversation component", async () => {

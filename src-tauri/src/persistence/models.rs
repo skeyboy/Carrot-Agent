@@ -97,6 +97,7 @@ pub struct RunRow {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub completed_at_ms: Option<i64>,
+    pub tool_catalog_snapshot_json: String,
 }
 
 impl TryFrom<RunRow> for AgentRun {
@@ -137,6 +138,11 @@ impl TryFrom<RunRow> for AgentRun {
             created_at_ms: row.created_at_ms,
             updated_at_ms: row.updated_at_ms,
             completed_at_ms: row.completed_at_ms,
+            tool_catalog_snapshot: serde_json::from_str(&row.tool_catalog_snapshot_json).map_err(
+                |error| StoreError::InvalidData {
+                    message: format!("run tool catalog snapshot is invalid: {error}"),
+                },
+            )?,
         })
     }
 }
@@ -161,6 +167,7 @@ pub struct NewRunRow<'a> {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub completed_at_ms: Option<i64>,
+    pub tool_catalog_snapshot_json: &'a str,
 }
 
 #[derive(Debug, Queryable, Selectable)]
@@ -326,6 +333,7 @@ pub struct ToolExecutionRow {
     pub risk: String,
     pub arguments_json: String,
     pub arguments_hash: String,
+    pub approval_preview: Option<String>,
     pub output_json: Option<String>,
     pub error_message: Option<String>,
     pub retryable: bool,
@@ -335,6 +343,12 @@ pub struct ToolExecutionRow {
     pub idempotency_key: Option<String>,
     pub reconciliation_status: String,
     pub reconciliation_note: Option<String>,
+    pub source_kind: String,
+    pub source_server_id: Option<String>,
+    pub remote_tool_name: Option<String>,
+    pub tool_schema_hash: String,
+    pub tool_definition_snapshot_json: String,
+    pub tool_policy_snapshot_json: String,
 }
 
 impl TryFrom<ToolExecutionRow> for ToolExecution {
@@ -361,6 +375,7 @@ impl TryFrom<ToolExecutionRow> for ToolExecution {
             risk: row.risk,
             arguments,
             arguments_hash: row.arguments_hash,
+            approval_preview: row.approval_preview,
             output,
             error_message: row.error_message,
             retryable: row.retryable,
@@ -370,6 +385,22 @@ impl TryFrom<ToolExecutionRow> for ToolExecution {
             idempotency_key: row.idempotency_key,
             reconciliation_status: row.reconciliation_status,
             reconciliation_note: row.reconciliation_note,
+            identity: crate::tools::ToolIdentity {
+                source_kind: row.source_kind,
+                source_server_id: row.source_server_id,
+                remote_tool_name: row.remote_tool_name,
+                schema_hash: row.tool_schema_hash,
+            },
+            definition_snapshot: serde_json::from_str(&row.tool_definition_snapshot_json).map_err(
+                |error| StoreError::InvalidData {
+                    message: format!("tool definition snapshot is invalid: {error}"),
+                },
+            )?,
+            policy_snapshot: serde_json::from_str(&row.tool_policy_snapshot_json).map_err(
+                |error| StoreError::InvalidData {
+                    message: format!("tool policy snapshot is invalid: {error}"),
+                },
+            )?,
         })
     }
 }
@@ -385,6 +416,7 @@ pub struct NewToolExecutionRow<'a> {
     pub risk: &'a str,
     pub arguments_json: &'a str,
     pub arguments_hash: &'a str,
+    pub approval_preview: Option<&'a str>,
     pub output_json: Option<&'a str>,
     pub error_message: Option<&'a str>,
     pub retryable: bool,
@@ -394,6 +426,12 @@ pub struct NewToolExecutionRow<'a> {
     pub idempotency_key: Option<&'a str>,
     pub reconciliation_status: &'a str,
     pub reconciliation_note: Option<&'a str>,
+    pub source_kind: &'a str,
+    pub source_server_id: Option<&'a str>,
+    pub remote_tool_name: Option<&'a str>,
+    pub tool_schema_hash: &'a str,
+    pub tool_definition_snapshot_json: &'a str,
+    pub tool_policy_snapshot_json: &'a str,
 }
 
 #[derive(Insertable)]

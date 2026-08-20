@@ -14,6 +14,10 @@ const emit = defineEmits<{ decide: [approved: boolean] }>();
       <strong>Approve {{ execution.toolName }}</strong>
       <span>This {{ execution.risk.replace(/_/g, " ") }} action is waiting for you.</span>
       <code>{{ execution.argumentsJson }}</code>
+      <pre
+        v-if="execution.approvalPreview"
+        class="tool-approval-diff"
+      ><code>{{ execution.approvalPreview }}</code></pre>
     </div>
     <div class="tool-decision-actions">
       <button type="button" :disabled="busy" @click="emit('decide', true)">

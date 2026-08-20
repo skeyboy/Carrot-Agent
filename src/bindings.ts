@@ -22,6 +22,20 @@ export const commands = {
 	credentialStatusList: () => typedError<CredentialStatusDto[], AppError>(__TAURI_INVOKE("credential_status_list")),
 	credentialSet: (request: SetCredentialRequest) => typedError<CredentialStatusDto, AppError>(__TAURI_INVOKE("credential_set", { request })),
 	credentialDelete: (providerId: string) => typedError<CredentialStatusDto, AppError>(__TAURI_INVOKE("credential_delete", { providerId })),
+	mcpCatalogGet: () => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_catalog_get")),
+	mcpSystemSettingsUpdate: (request: McpSystemSettingsRequest) => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_system_settings_update", { request })),
+	mcpPresetInstall: (request: McpPresetInstallRequest) => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_preset_install", { request })),
+	mcpServerCreate: (request: McpServerRequest) => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_server_create", { request })),
+	mcpServerUpdate: (request: McpServerRequest) => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_server_update", { request })),
+	mcpServerDelete: (serverId: string) => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_server_delete", { serverId })),
+	mcpServerConnect: (serverId: string) => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_server_connect", { serverId })),
+	mcpServerDisconnect: (serverId: string) => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_server_disconnect", { serverId })),
+	mcpServerRefresh: (serverId: string) => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_server_refresh", { serverId })),
+	mcpToolPolicySet: (request: McpToolPolicyRequest) => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_tool_policy_set", { request })),
+	mcpAuthSet: (request: McpAuthRequest) => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_auth_set", { request })),
+	mcpAuthClear: (serverId: string) => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_auth_clear", { serverId })),
+	mcpOauthBegin: (request: McpOAuthBeginRequest) => typedError<McpOAuthStart, AppError>(__TAURI_INVOKE("mcp_oauth_begin", { request })),
+	mcpOauthComplete: (request: McpOAuthCompleteRequest) => typedError<McpCatalogSnapshot, AppError>(__TAURI_INVOKE("mcp_oauth_complete", { request })),
 	attachmentList: (conversationId: string) => typedError<AttachmentDto[], AppError>(__TAURI_INVOKE("attachment_list", { conversationId })),
 	attachmentPickAndImport: (conversationId: string) => typedError<{
 	id: string,
@@ -156,6 +170,117 @@ export type HealthStatus = {
 	phase: string,
 };
 
+export type McpAuthKind = "none" | "bearer" | "oauth";
+
+export type McpAuthRequest = {
+	serverId: string,
+	secret: string,
+};
+
+export type McpCatalogSnapshot = {
+	configPath: string,
+	system: McpSystemSettings,
+	servers: McpServerSummary[],
+	revision: string,
+};
+
+export type McpConnectionState = "disabled" | "disconnected" | "connecting" | "ready" | "degraded" | "reconnecting" | "failed";
+
+export type McpOAuthBeginRequest = {
+	serverId: string,
+	redirectUri: string,
+};
+
+export type McpOAuthCompleteRequest = {
+	serverId: string,
+	callbackUrl: string,
+};
+
+export type McpOAuthStart = {
+	serverId: string,
+	authorizationUrl: string,
+};
+
+export type McpPresetInstallRequest = {
+	preset: McpPresetKind,
+	workspacePath: string | null,
+};
+
+export type McpPresetKind = "workspace_filesystem" | "brave_search";
+
+export type McpServerConfig = {
+	id: string,
+	label: string,
+	enabled: boolean,
+	transport?: McpTransportKind,
+	executable?: string,
+	arguments?: string[],
+	workingDirectory: string | null,
+	url?: string | null,
+	auth?: McpAuthKind,
+	oauthClientId?: string | null,
+	oauthScopes?: string[],
+	preset?: McpPresetKind | null,
+	secretEnvironmentVariable?: string | null,
+	readDirectories?: string[],
+	allowedDirectories?: string[],
+	allowedDomains?: string[],
+	allowNetwork?: boolean,
+	toolPolicies?: McpToolPolicy[],
+};
+
+export type McpServerRequest = {
+	config: McpServerConfig,
+};
+
+export type McpServerSummary = {
+	config: McpServerConfig,
+	state: McpConnectionState,
+	error: string | null,
+	tools: McpToolSummary[],
+	authConfigured: boolean,
+	catalogRevision: string,
+};
+
+export type McpSystemSettings = {
+	controlledLocalTools: boolean,
+	remoteHttp: boolean,
+	secureAuth: boolean,
+	dynamicUpdates: boolean,
+};
+
+export type McpSystemSettingsRequest = {
+	settings: McpSystemSettings,
+};
+
+export type McpToolPolicy = {
+	name: string,
+	enabled: boolean,
+	risk: ToolRisk,
+	idempotent: boolean,
+	reconcile: boolean,
+};
+
+export type McpToolPolicyRequest = {
+	serverId: string,
+	policy: McpToolPolicy,
+};
+
+export type McpToolSummary = {
+	name: string,
+	alias: string,
+	title: string | null,
+	description: string,
+	schemaHash: string,
+	readOnlyHint: boolean | null,
+	enabled: boolean,
+	risk: ToolRisk,
+	idempotent: boolean,
+	reconcile: boolean,
+};
+
+export type McpTransportKind = "stdio" | "streamable_http";
+
 export type PendingInputDto = {
 	id: string,
 	runId: string,
@@ -262,6 +387,7 @@ export type ToolExecutionDto = {
 	status: string,
 	risk: string,
 	argumentsJson: string,
+	approvalPreview: string | null,
 	outputJson: string | null,
 	errorMessage: string | null,
 	idempotencyKey: string | null,
@@ -275,6 +401,8 @@ export type ToolRecoveryRequest = {
 	resolution: RecoveryResolution,
 	note: string | null,
 };
+
+export type ToolRisk = "read_only" | "local_write" | "external_side_effect" | "dangerous";
 
 export type UpdateConversationRequest = {
 	id: string,

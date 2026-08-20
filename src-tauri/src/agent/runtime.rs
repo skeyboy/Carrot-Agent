@@ -34,6 +34,8 @@ pub enum RuntimeError {
     Paused,
     #[error("run is waiting for tool approval")]
     WaitingForApproval,
+    #[error("run requires tool outcome reconciliation")]
+    RecoveryRequired,
 }
 
 pub struct RuntimeInput {
@@ -82,6 +84,7 @@ impl AgentRuntime {
                 parent_run_id: input.parent_run_id.clone(),
                 source_pending_input_id: input.source_pending_input_id.clone(),
                 user_content,
+                tool_catalog_snapshot: self.tools.snapshot(),
             })
             .await?;
 
@@ -94,7 +97,10 @@ impl AgentRuntime {
             }
             result => result,
         };
-        if matches!(result, Err(RuntimeError::WaitingForApproval)) {
+        if matches!(
+            result,
+            Err(RuntimeError::WaitingForApproval | RuntimeError::RecoveryRequired)
+        ) {
             return Ok(());
         }
         if let Err(error) = &result {
@@ -151,7 +157,10 @@ impl AgentRuntime {
             }
             result => result,
         };
-        if matches!(result, Err(RuntimeError::WaitingForApproval)) {
+        if matches!(
+            result,
+            Err(RuntimeError::WaitingForApproval | RuntimeError::RecoveryRequired)
+        ) {
             return Ok(());
         }
         if let Err(error) = &result {
@@ -405,10 +414,30 @@ impl AgentRuntime {
                             cancellable: true,
                             reconcile: false,
                         });
+                let identity = self
+                    .tools
+                    .identity(&call.name)
+                    .map_err(|error| RuntimeError::Provider(error.to_string()))?;
+                let definition_snapshot = self
+                    .tools
+                    .definitions()
+                    .into_iter()
+                    .find(|definition| definition.name == call.name)
+                    .ok_or_else(|| {
+                        RuntimeError::Provider(format!("unknown tool '{}'", call.name))
+                    })?;
                 let serialized = serde_json::to_vec(&call.arguments)
                     .map_err(|error| RuntimeError::Provider(error.to_string()))?;
                 let arguments_hash = format!("{:x}", Sha256::digest(serialized));
                 let execution_id = Uuid::now_v7().to_string();
+                let approval_preview = if capabilities.risk == ToolRisk::ReadOnly {
+                    None
+                } else {
+                    self.tools
+                        .approval_preview(&call.name, &call.arguments)
+                        .await
+                        .map_err(|error| RuntimeError::Provider(error.to_string()))?
+                };
                 let idempotency_key = self
                     .tools
                     .idempotency_key(
@@ -430,8 +459,12 @@ impl AgentRuntime {
                             risk: capabilities.risk.as_str().to_owned(),
                             arguments: call.arguments.clone(),
                             arguments_hash: arguments_hash.clone(),
+                            approval_preview,
                             retryable: capabilities.idempotent && capabilities.reconcile,
                             idempotency_key: Some(idempotency_key.clone()),
+                            identity,
+                            definition_snapshot,
+                            policy_snapshot: capabilities,
                         },
                     )
                     .await?;
@@ -473,11 +506,20 @@ impl AgentRuntime {
                     .await
                     {
                         Ok(result) => result,
+                        Err(_) if capabilities.risk != ToolRisk::ReadOnly => Err(
+                            ToolError::OutcomeUnknown("tool timed out after dispatch".to_owned()),
+                        ),
                         Err(_) => Err(ToolError::Execution("tool timed out".to_owned())),
                     }
                 } else {
                     execution.await
                 };
+                if let Err(ToolError::OutcomeUnknown(reason)) = &result {
+                    self.store
+                        .mark_tool_outcome_unknown(&input.run_id, &execution_id, reason)
+                        .await?;
+                    return Err(RuntimeError::RecoveryRequired);
+                }
                 let (output, error_message, cancelled) = match result {
                     Ok(output) => (output, None, false),
                     Err(error) => (
@@ -525,6 +567,23 @@ impl AgentRuntime {
                 .tools
                 .capabilities(&execution.tool_name)
                 .map_err(|error| RuntimeError::Provider(error.to_string()))?;
+            let current_identity = self
+                .tools
+                .identity(&execution.tool_name)
+                .map_err(|error| RuntimeError::Provider(error.to_string()))?;
+            if current_identity != execution.identity
+                || capabilities != execution.policy_snapshot
+                || !self
+                    .tools
+                    .definitions()
+                    .iter()
+                    .any(|definition| definition == &execution.definition_snapshot)
+            {
+                return Err(RuntimeError::Provider(format!(
+                    "tool '{}' changed after approval; start a new run",
+                    execution.tool_name
+                )));
+            }
             self.store
                 .mark_tool_executing(&input.run_id, &execution.id)
                 .await?;
@@ -550,11 +609,20 @@ impl AgentRuntime {
                     .await
                 {
                     Ok(result) => result,
+                    Err(_) if execution.policy_snapshot.risk != ToolRisk::ReadOnly => Err(
+                        ToolError::OutcomeUnknown("tool timed out after dispatch".to_owned()),
+                    ),
                     Err(_) => Err(ToolError::Execution("tool timed out".to_owned())),
                 }
             } else {
                 task.await
             };
+            if let Err(ToolError::OutcomeUnknown(reason)) = &result {
+                self.store
+                    .mark_tool_outcome_unknown(&input.run_id, &execution.id, reason)
+                    .await?;
+                return Err(RuntimeError::RecoveryRequired);
+            }
             let (output, error_message, cancelled) = match result {
                 Ok(output) => (output, None, false),
                 Err(error) => (
@@ -717,23 +785,29 @@ fn message_text(message: &ProviderMessage) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use async_trait::async_trait;
+    use tokio::sync::RwLock;
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
     use super::{AgentRuntime, RuntimeError, RuntimeInput, provider_failure};
+    use crate::credentials::{CredentialError, CredentialStore};
     use crate::domain::conversation::NewConversation;
+    use crate::domain::mcp::{McpPresetKind, McpToolPolicy};
     use crate::domain::provider::{
         ProviderCapabilities, ProviderKind, ProviderProfile, ProviderProtocol,
     };
     use crate::domain::run::RunStatus;
     use crate::domain::settings::RunStrategy;
     use crate::domain::storage::{ConversationStore, RunStore};
+    use crate::mcp::{McpClientManager, McpConfigStore};
     use crate::persistence::{Database, SqliteConversationStore, SqliteRunStore};
+    use crate::providers::OpenAiResponsesProvider;
     use crate::providers::runtime::{
         LlmProvider, MessageContent, MessageRole, ProviderError, ProviderEvent, ProviderMessage,
         ProviderRequest,
@@ -767,6 +841,30 @@ mod tests {
     }
 
     struct ImmediateProvider;
+
+    #[derive(Default)]
+    struct AcceptanceCredentials(RwLock<HashMap<String, String>>);
+
+    #[async_trait]
+    impl CredentialStore for AcceptanceCredentials {
+        async fn contains(&self, reference: &str) -> Result<bool, CredentialError> {
+            Ok(self.0.read().await.contains_key(reference))
+        }
+
+        async fn get(&self, reference: &str) -> Result<Option<String>, CredentialError> {
+            Ok(self.0.read().await.get(reference).cloned())
+        }
+
+        async fn set(&self, reference: &str, secret: String) -> Result<(), CredentialError> {
+            self.0.write().await.insert(reference.to_owned(), secret);
+            Ok(())
+        }
+
+        async fn delete(&self, reference: &str) -> Result<(), CredentialError> {
+            self.0.write().await.remove(reference);
+            Ok(())
+        }
+    }
 
     #[test]
     fn explains_unsupported_multimodal_requests() {
@@ -1029,6 +1127,130 @@ mod tests {
         assert_eq!(items[1].kind, "reasoning_summary");
         assert_eq!(items[1].content["summary"], "Checked the edited request.");
         assert_eq!(message_text_from_item(&items[2].content), "Edited answer");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "requires a live Provider and downloads the pinned official Filesystem MCP server"]
+    async fn real_provider_and_filesystem_mcp_complete_a_tool_loop() {
+        let api_key = std::env::var("CARROT_REAL_PROVIDER_API_KEY")
+            .expect("set CARROT_REAL_PROVIDER_API_KEY");
+        let base_url = std::env::var("CARROT_REAL_PROVIDER_BASE_URL")
+            .expect("set CARROT_REAL_PROVIDER_BASE_URL");
+        let model =
+            std::env::var("CARROT_REAL_PROVIDER_MODEL").expect("set CARROT_REAL_PROVIDER_MODEL");
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let marker = "carrot-provider-filesystem-e2e-7f31";
+        let marker_path = workspace.join("marker.txt");
+        std::fs::write(&marker_path, marker).unwrap();
+        let marker_path = std::fs::canonicalize(marker_path).unwrap();
+
+        let mcp = McpClientManager::initialize(
+            McpConfigStore::new(temp.path().join("config/mcp-servers.toml")),
+            Arc::new(AcceptanceCredentials::default()),
+        )
+        .await
+        .unwrap();
+        mcp.install_preset(
+            McpPresetKind::WorkspaceFilesystem,
+            Some(workspace.display().to_string()),
+        )
+        .await
+        .unwrap();
+        mcp.set_tool_policy(
+            "workspace-files",
+            McpToolPolicy {
+                name: "read_text_file".to_owned(),
+                enabled: true,
+                risk: crate::tools::ToolRisk::ReadOnly,
+                idempotent: true,
+                reconcile: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let database = Database::connect(&temp.path().join("acceptance.sqlite3"))
+            .await
+            .unwrap();
+        let conversations = SqliteConversationStore::new(database.clone());
+        let conversation = conversations
+            .create(NewConversation {
+                title: "Real MCP acceptance".to_owned(),
+                default_provider_profile_id: "acceptance".to_owned(),
+                default_model: model.clone(),
+            })
+            .await
+            .unwrap();
+        let store: Arc<dyn RunStore> = Arc::new(SqliteRunStore::new(database));
+        let runtime = AgentRuntime::new(store.clone(), mcp.tool_registry().await);
+        let provider: Arc<dyn LlmProvider> =
+            Arc::new(OpenAiResponsesProvider::new(api_key, base_url.clone()));
+        let (sender, mut receiver) = mpsc::channel(128);
+        runtime
+            .run(
+                provider,
+                RuntimeInput {
+                    run_id: "real-provider-filesystem".to_owned(),
+                    conversation_id: conversation.id.clone(),
+                    strategy: RunStrategy::Auto,
+                    provider_profile: ProviderProfile {
+                        id: "acceptance".to_owned(),
+                        label: "Acceptance".to_owned(),
+                        kind: ProviderKind::OpenaiCompatible,
+                        protocol: ProviderProtocol::Responses,
+                        base_url,
+                        default_model: model.clone(),
+                        available_models: vec![model.clone()],
+                        enabled_models: vec![model.clone()],
+                        models_synced_at_ms: None,
+                        credential_ref: "acceptance-key".to_owned(),
+                        store_responses: false,
+                        capabilities: ProviderCapabilities {
+                            tools: true,
+                            images: false,
+                            files: false,
+                        },
+                    },
+                    model,
+                    runtime_instance_id: "acceptance-runtime".to_owned(),
+                    replaces_run_id: None,
+                    parent_run_id: None,
+                    source_pending_input_id: None,
+                    user_message: ProviderMessage {
+                        role: MessageRole::User,
+                        content: vec![MessageContent::Text {
+                            text: format!(
+                                "Use the workspace file tool to read {}. Reply with its exact contents.",
+                                marker_path.display()
+                            ),
+                        }],
+                    },
+                    max_model_steps: 6,
+                    request_timeout: Duration::from_secs(90),
+                },
+                sender,
+                crate::agent::cancellation::RunCancellation::detached(),
+            )
+            .await
+            .unwrap();
+        while receiver.try_recv().is_ok() {}
+        let snapshot = store.snapshot(&conversation.id).await.unwrap();
+        assert!(
+            snapshot
+                .tool_executions
+                .iter()
+                .any(|execution| execution.status == "succeeded")
+        );
+        assert!(
+            snapshot
+                .items
+                .iter()
+                .any(|item| item.content.to_string().contains(marker))
+        );
+        mcp.disconnect_all().await;
     }
 
     fn runtime_input(

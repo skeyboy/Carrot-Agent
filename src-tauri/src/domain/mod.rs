@@ -1,5 +1,6 @@
 pub mod attachment;
 pub mod conversation;
+pub mod mcp;
 pub mod provider;
 pub mod run;
 pub mod settings;

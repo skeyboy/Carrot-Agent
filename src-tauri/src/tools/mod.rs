@@ -3,12 +3,15 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use specta::Type;
 use tokio_util::sync::CancellationToken;
 
 use crate::providers::runtime::ToolDefinition;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
 pub enum ToolRisk {
     ReadOnly,
@@ -26,14 +29,42 @@ impl ToolRisk {
             Self::Dangerous => "dangerous",
         }
     }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "read_only" => Self::ReadOnly,
+            "local_write" => Self::LocalWrite,
+            "external_side_effect" => Self::ExternalSideEffect,
+            "dangerous" => Self::Dangerous,
+            _ => return None,
+        })
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolCapabilities {
     pub risk: ToolRisk,
     pub idempotent: bool,
     pub cancellable: bool,
     pub reconcile: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolIdentity {
+    pub source_kind: String,
+    pub source_server_id: Option<String>,
+    pub remote_tool_name: Option<String>,
+    pub schema_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolSnapshot {
+    pub definition: ToolDefinition,
+    pub capabilities: ToolCapabilities,
+    pub identity: ToolIdentity,
 }
 
 #[derive(Debug, Clone)]
@@ -51,14 +82,28 @@ pub enum ToolError {
     Execution(String),
     #[error("tool execution was cancelled")]
     Cancelled,
+    #[error("tool outcome is unknown: {0}")]
+    OutcomeUnknown(String),
 }
 
 #[async_trait]
 pub trait AgentTool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
     fn capabilities(&self) -> ToolCapabilities;
+    fn identity(&self) -> ToolIdentity {
+        let definition = self.definition();
+        ToolIdentity {
+            source_kind: "built_in".to_owned(),
+            source_server_id: None,
+            remote_tool_name: None,
+            schema_hash: schema_hash(&definition.parameters),
+        }
+    }
     fn business_idempotency_key(&self, _arguments: &Value) -> Option<String> {
         None
+    }
+    async fn approval_preview(&self, _arguments: &Value) -> Result<Option<String>, ToolError> {
+        Ok(None)
     }
     async fn execute(
         &self,
@@ -88,6 +133,16 @@ impl ToolRegistry {
         }
     }
 
+    pub fn extend(&self, additions: Vec<Arc<dyn AgentTool>>) -> Self {
+        let mut tools = self.tools.as_ref().clone();
+        for tool in additions {
+            tools.insert(tool.definition().name, tool);
+        }
+        Self {
+            tools: Arc::new(tools),
+        }
+    }
+
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         let mut definitions = self
             .tools
@@ -96,6 +151,58 @@ impl ToolRegistry {
             .collect::<Vec<_>>();
         definitions.sort_by(|left, right| left.name.cmp(&right.name));
         definitions
+    }
+
+    pub async fn approval_preview(
+        &self,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<Option<String>, ToolError> {
+        let tool = self
+            .tools
+            .get(name)
+            .ok_or_else(|| ToolError::Unknown(name.to_owned()))?;
+        tool.approval_preview(arguments).await
+    }
+
+    pub fn snapshot(&self) -> Vec<ToolSnapshot> {
+        let mut snapshot = self
+            .tools
+            .values()
+            .map(|tool| ToolSnapshot {
+                definition: tool.definition(),
+                capabilities: tool.capabilities(),
+                identity: tool.identity(),
+            })
+            .collect::<Vec<_>>();
+        snapshot.sort_by(|left, right| left.definition.name.cmp(&right.definition.name));
+        snapshot
+    }
+
+    pub fn identity(&self, name: &str) -> Result<ToolIdentity, ToolError> {
+        self.tools
+            .get(name)
+            .map(|tool| tool.identity())
+            .ok_or_else(|| ToolError::Unknown(name.to_owned()))
+    }
+
+    pub fn retain_snapshot(&self, snapshot: &[ToolSnapshot]) -> Self {
+        let expected = snapshot
+            .iter()
+            .map(|item| (item.definition.name.as_str(), item))
+            .collect::<HashMap<_, _>>();
+        let tools = self
+            .tools
+            .iter()
+            .filter_map(|(name, tool)| {
+                let item = expected.get(name.as_str())?;
+                (tool.identity() == item.identity && tool.definition() == item.definition)
+                    .then(|| (name.clone(), tool.clone()))
+            })
+            .collect();
+        Self {
+            tools: Arc::new(tools),
+        }
     }
 
     pub fn capabilities(&self, name: &str) -> Result<ToolCapabilities, ToolError> {
@@ -128,8 +235,28 @@ impl ToolRegistry {
             .tools
             .get(name)
             .ok_or_else(|| ToolError::Unknown(name.to_owned()))?;
+        validate_arguments(&tool.definition().parameters, &arguments)?;
         tool.execute(arguments, context, cancellation).await
     }
+}
+
+pub fn schema_hash(schema: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    let encoded = serde_json::to_vec(schema).unwrap_or_default();
+    format!("{:x}", Sha256::digest(encoded))
+}
+
+fn validate_arguments(schema: &Value, arguments: &Value) -> Result<(), ToolError> {
+    let validator = jsonschema::validator_for(schema)
+        .map_err(|error| ToolError::InvalidArguments(format!("tool schema is invalid: {error}")))?;
+    if let Err(error) = validator.validate(arguments) {
+        return Err(ToolError::InvalidArguments(format!(
+            "{} at {}",
+            error,
+            error.instance_path()
+        )));
+    }
+    Ok(())
 }
 
 struct CurrentTimeTool;

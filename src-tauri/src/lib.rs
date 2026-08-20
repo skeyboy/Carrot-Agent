@@ -4,6 +4,7 @@ mod commands;
 mod credentials;
 mod domain;
 mod error;
+pub mod mcp;
 mod persistence;
 mod providers;
 mod settings;
@@ -38,6 +39,20 @@ fn ipc_builder() -> Builder<tauri::Wry> {
         commands::settings::credential_status_list,
         commands::settings::credential_set,
         commands::settings::credential_delete,
+        commands::mcp::mcp_catalog_get,
+        commands::mcp::mcp_system_settings_update,
+        commands::mcp::mcp_preset_install,
+        commands::mcp::mcp_server_create,
+        commands::mcp::mcp_server_update,
+        commands::mcp::mcp_server_delete,
+        commands::mcp::mcp_server_connect,
+        commands::mcp::mcp_server_disconnect,
+        commands::mcp::mcp_server_refresh,
+        commands::mcp::mcp_tool_policy_set,
+        commands::mcp::mcp_auth_set,
+        commands::mcp::mcp_auth_clear,
+        commands::mcp::mcp_oauth_begin,
+        commands::mcp::mcp_oauth_complete,
         commands::attachment::attachment_list,
         commands::attachment::attachment_pick_and_import,
         commands::attachment::attachment_delete,
@@ -98,7 +113,7 @@ pub fn run() {
             let app_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 let service = app_handle.state::<application::CarrotService>();
-                let _ = service.prepare_for_suspend().await;
+                service.resume_from_suspend().await;
             });
         }
         _ => {}

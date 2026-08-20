@@ -74,6 +74,13 @@ pub trait RunStore: Send + Sync {
         result: ToolExecutionResult,
     ) -> Result<CommitResult, StoreError>;
 
+    async fn mark_tool_outcome_unknown(
+        &self,
+        run_id: &str,
+        execution_id: &str,
+        reason: &str,
+    ) -> Result<RunEvent, StoreError>;
+
     async fn create_plan(&self, run_id: &str, plan: PlanDraft) -> Result<RunEvent, StoreError>;
 
     async fn conversation_items(&self, conversation_id: &str) -> Result<Vec<RunItem>, StoreError>;

@@ -69,6 +69,28 @@ impl From<crate::providers::ProviderConfigError> for AppError {
     }
 }
 
+impl From<crate::mcp::McpConfigError> for AppError {
+    fn from(error: crate::mcp::McpConfigError) -> Self {
+        Self::Configuration {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<crate::mcp::McpError> for AppError {
+    fn from(error: crate::mcp::McpError) -> Self {
+        match error {
+            crate::mcp::McpError::ServerNotFound(id) => Self::not_found("MCP server", &id),
+            crate::mcp::McpError::Configuration(message) => Self::Configuration { message },
+            crate::mcp::McpError::Policy(message)
+            | crate::mcp::McpError::Authorization(message) => Self::InvalidInput { message },
+            other => Self::Internal {
+                message: other.to_string(),
+            },
+        }
+    }
+}
+
 impl From<crate::settings::SettingsError> for AppError {
     fn from(error: crate::settings::SettingsError) -> Self {
         Self::Configuration {

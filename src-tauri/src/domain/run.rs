@@ -3,6 +3,7 @@ use specta::Type;
 
 use super::provider::ProviderProfile;
 use super::settings::RunStrategy;
+use crate::tools::{ToolCapabilities, ToolIdentity, ToolSnapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
@@ -124,6 +125,7 @@ pub struct AgentRun {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub completed_at_ms: Option<i64>,
+    pub tool_catalog_snapshot: Vec<ToolSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +140,7 @@ pub struct NewRun {
     pub parent_run_id: Option<String>,
     pub source_pending_input_id: Option<String>,
     pub user_content: serde_json::Value,
+    pub tool_catalog_snapshot: Vec<ToolSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
@@ -195,6 +198,7 @@ pub struct ToolExecution {
     pub risk: String,
     pub arguments: serde_json::Value,
     pub arguments_hash: String,
+    pub approval_preview: Option<String>,
     pub output: Option<serde_json::Value>,
     pub error_message: Option<String>,
     pub retryable: bool,
@@ -204,6 +208,9 @@ pub struct ToolExecution {
     pub idempotency_key: Option<String>,
     pub reconciliation_status: String,
     pub reconciliation_note: Option<String>,
+    pub identity: ToolIdentity,
+    pub definition_snapshot: crate::providers::runtime::ToolDefinition,
+    pub policy_snapshot: ToolCapabilities,
 }
 
 #[derive(Debug, Clone)]
@@ -214,8 +221,12 @@ pub struct NewToolExecution {
     pub risk: String,
     pub arguments: serde_json::Value,
     pub arguments_hash: String,
+    pub approval_preview: Option<String>,
     pub retryable: bool,
     pub idempotency_key: Option<String>,
+    pub identity: ToolIdentity,
+    pub definition_snapshot: crate::providers::runtime::ToolDefinition,
+    pub policy_snapshot: ToolCapabilities,
 }
 
 #[derive(Debug, Clone)]
